@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "image.h"
+#include "../../../rinresource/include/rinresource/loader.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -62,6 +63,16 @@ RinImageStatus rin_image_decode(const uint8_t* data, size_t source_bytes,
                                 uint32_t* pixels, size_t pixel_capacity,
                                 uint8_t* scratch, size_t scratch_capacity,
                                 RinImageProbe* probe_out);
+
+/* Resolve one public TYPE_IMAGE resource into caller-owned source storage and
+ * decode its first frame. The catalog loader performs no filesystem access;
+ * source_size_out and probe_out are cleared before a failure is returned. */
+RinImageStatus rin_image_decode_resource(
+    const RinResourceCatalogV1* catalog, uint32_t resource_id,
+    RinResourceCatalogReadPathFunction read_path, void* context,
+    uint8_t* source, size_t source_capacity, size_t* source_size_out,
+    const RinImageDecodeLimits* limits, uint32_t* pixels, size_t pixel_capacity,
+    uint8_t* scratch, size_t scratch_capacity, RinImageProbe* probe_out);
 
 /* Cancellation-aware form used by a service owner.  The callback is polled
  * at admission, codec boundaries, and bounded row/plane loops; it never owns

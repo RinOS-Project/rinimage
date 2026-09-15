@@ -688,3 +688,62 @@ RinImageStatus rin_image_decode(const uint8_t* data, size_t source_bytes,
         data, source_bytes, limits, pixels, pixel_capacity, scratch,
         scratch_capacity, NULL, NULL, probe_out);
 }
+
+static RinImageStatus rin_image_resource_status(
+    RinResourceCatalogStatus status)
+{
+    switch (status) {
+        case RIN_RESOURCE_CATALOG_BUFFER_TOO_SMALL:
+            return RIN_IMAGE_LIMIT;
+        case RIN_RESOURCE_CATALOG_INVALID_LAYOUT:
+            return RIN_IMAGE_MALFORMED;
+        case RIN_RESOURCE_CATALOG_UNSUPPORTED_VERSION:
+            return RIN_IMAGE_UNSUPPORTED;
+        case RIN_RESOURCE_CATALOG_IO_ERROR:
+            return RIN_IMAGE_SERVICE_UNAVAILABLE;
+        case RIN_RESOURCE_CATALOG_OK:
+            return RIN_IMAGE_OK;
+        default:
+            return RIN_IMAGE_INVALID_ARGUMENT;
+    }
+}
+
+RinImageStatus rin_image_decode_resource(
+    const RinResourceCatalogV1* catalog, uint32_t resource_id,
+    RinResourceCatalogReadPathFunction read_path, void* context,
+    uint8_t* source, size_t source_capacity, size_t* source_size_out,
+    const RinImageDecodeLimits* limits, uint32_t* pixels, size_t pixel_capacity,
+    uint8_t* scratch, size_t scratch_capacity, RinImageProbe* probe_out)
+{
+    RinResourceCatalogStatus resource_status;
+    RinImageStatus status;
+    uint64_t loaded_size = 0u;
+
+    if (source_size_out == NULL || probe_out == NULL) {
+        if (source_size_out != NULL) *source_size_out = 0u;
+        if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
+        return RIN_IMAGE_INVALID_ARGUMENT;
+    }
+    *source_size_out = 0u;
+    memset(probe_out, 0, sizeof(*probe_out));
+    if (source_capacity != 0u && source == NULL)
+        return RIN_IMAGE_INVALID_ARGUMENT;
+
+    resource_status = rin_resource_catalog_load(
+        catalog, RIN_RESOURCE_CATALOG_TYPE_IMAGE, resource_id, read_path,
+        context, source, (uint64_t)source_capacity, &loaded_size);
+    status = rin_image_resource_status(resource_status);
+    if (status != RIN_IMAGE_OK || loaded_size > SIZE_MAX || loaded_size == 0u)
+        return status == RIN_IMAGE_OK ? RIN_IMAGE_MALFORMED : status;
+
+    status = rin_image_decode(source, (size_t)loaded_size, limits, pixels,
+                              pixel_capacity, scratch, scratch_capacity,
+                              probe_out);
+    if (status != RIN_IMAGE_OK) {
+        *source_size_out = 0u;
+        memset(probe_out, 0, sizeof(*probe_out));
+        return status;
+    }
+    *source_size_out = (size_t)loaded_size;
+    return RIN_IMAGE_OK;
+}
