@@ -33,6 +33,19 @@ typedef struct RinImageProbe {
 
 typedef int (*RinImageCancellationFunction)(void* context);
 
+/* Probe a bounded PNG without allocating.  This small backend entry is also
+ * usable by compatibility adapters that must not link the complete
+ * multi-format decoder. */
+RinImageStatus rin_image_probe_png(const uint8_t* data, size_t source_bytes,
+                                   const RinImageDecodeLimits* limits,
+                                   RinImageProbe* probe_out);
+
+/* Decode a bounded PNG into canonical ARGB words. */
+RinImageStatus rin_image_decode_png(const uint8_t* data, size_t source_bytes,
+                                    const RinImageDecodeLimits* limits,
+                                    uint32_t* pixels, size_t pixel_capacity,
+                                    RinImageProbe* probe_out);
+
 /* Probe and validate an untrusted encoded image without allocating. */
 RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
                                const RinImageDecodeLimits* limits,

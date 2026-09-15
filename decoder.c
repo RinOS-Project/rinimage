@@ -388,15 +388,7 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
         status = RIN_IMAGE_OK;
     } else if (source_bytes >= 4u && data[0] == 0x89u && data[1] == 'P' &&
                data[2] == 'N' && data[3] == 'G') {
-        const int result = rpng_get_info(data, source_bytes, &width, &height);
-        if (result != RPNG_OK)
-            return rin_image_codec_status(result, RPNG_ERR_UNSUPPORTED);
-        probe->format = RIN_IMAGE_FORMAT_PNG;
-        probe->size.width = (uint32_t)width;
-        probe->size.height = (uint32_t)height;
-        probe->frame_count = 1u;
-        probe->kind = RIN_IMAGE_FRAME_STATIC;
-        status = RIN_IMAGE_OK;
+        status = rin_image_probe_png(data, source_bytes, limits, probe);
     } else if (source_bytes >= 12u && data[0] == 'R' && data[1] == 'I' &&
                data[2] == 'F' && data[3] == 'F' && data[8] == 'W' &&
                data[9] == 'E' && data[10] == 'B' && data[11] == 'P') {
@@ -616,9 +608,8 @@ RinImageStatus rin_image_decode_cancellable(
                      ? RIN_IMAGE_OK : RIN_IMAGE_MALFORMED;
         break;
     case RIN_IMAGE_FORMAT_PNG:
-        status = rpng_decode_rgba(data, source_bytes, pixels,
-                                  (int)probe.size.width, (int)probe.size.height) == RPNG_OK
-                     ? RIN_IMAGE_OK : RIN_IMAGE_MALFORMED;
+        status = rin_image_decode_png(data, source_bytes, limits, pixels,
+                                      pixel_capacity, NULL);
         break;
     case RIN_IMAGE_FORMAT_WEBP: {
         size_t index;
