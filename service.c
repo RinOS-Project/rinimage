@@ -38,16 +38,27 @@ typedef struct RinImageServicePollContext {
 static void rin_image_service_clear_outputs(
     const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out)
 {
+    size_t pixel_bytes = 0u;
+    size_t scratch_bytes = 0u;
     if (frame_out != NULL) memset(frame_out, 0, sizeof(*frame_out));
     if (request == NULL) return;
-    if (request->pixels != NULL && request->pixel_capacity <=
-                                      RIN_IMAGE_SERVICE_MAX_OUTPUT /
-                                          sizeof(uint32_t))
-        memset(request->pixels, 0,
-               request->pixel_capacity * sizeof(uint32_t));
-    if (request->scratch != NULL && request->scratch_capacity <=
-                                      RIN_IMAGE_SERVICE_MAX_OUTPUT)
-        memset(request->scratch, 0, request->scratch_capacity);
+    /* The decoder can publish at most the service output limit.  Clear that
+     * bounded prefix even when a caller supplies a larger backing region;
+     * skipping the clear for oversized capacities would leave stale pixels
+     * visible after a malformed-source failure. */
+    if (request->pixels != NULL) {
+        const size_t max_pixels = RIN_IMAGE_SERVICE_MAX_OUTPUT / sizeof(uint32_t);
+        const size_t clear_pixels = request->pixel_capacity < max_pixels
+            ? request->pixel_capacity : max_pixels;
+        if (clear_pixels <= SIZE_MAX / sizeof(uint32_t))
+            pixel_bytes = clear_pixels * sizeof(uint32_t);
+        if (pixel_bytes != 0u) memset(request->pixels, 0, pixel_bytes);
+    }
+    if (request->scratch != NULL) {
+        scratch_bytes = request->scratch_capacity < RIN_IMAGE_SERVICE_MAX_OUTPUT
+            ? request->scratch_capacity : RIN_IMAGE_SERVICE_MAX_OUTPUT;
+        if (scratch_bytes != 0u) memset(request->scratch, 0, scratch_bytes);
+    }
     if (request->source != NULL && request->source_buffer != NULL &&
         request->source->size <= RIN_IMAGE_SERVICE_MAX_SOURCE)
         memset(request->source_buffer, 0, request->source->size);
