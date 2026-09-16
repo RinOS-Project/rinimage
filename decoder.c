@@ -18,6 +18,15 @@ static void rin_image_clear_decode_output(uint32_t* pixels,
     memset(pixels, 0, clear_pixels * sizeof(uint32_t));
 }
 
+static void rin_image_clear_decode_scratch(uint8_t* scratch,
+                                           size_t scratch_capacity)
+{
+    size_t clear_bytes = scratch_capacity < RIN_IMAGE_FAILURE_SCRUB_BYTES
+        ? scratch_capacity : RIN_IMAGE_FAILURE_SCRUB_BYTES;
+    if (scratch == NULL || clear_bytes == 0u) return;
+    memset(scratch, 0, clear_bytes);
+}
+
 #include "../ringif/ringif.h"
 #include "../rinjpeg/rinjpeg.h"
 #include "../rinpng/rpng.h"
@@ -594,6 +603,7 @@ RinImageStatus rin_image_decode_cancellable(
     size_t output_bytes;
     if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
     rin_image_clear_decode_output(pixels, pixel_capacity);
+    rin_image_clear_decode_scratch(scratch, scratch_capacity);
     if (pixels == NULL) return RIN_IMAGE_INVALID_ARGUMENT;
     status = rin_image_probe(data, source_bytes, limits, &probe);
     if (status != RIN_IMAGE_OK) return status;
@@ -735,6 +745,7 @@ RinImageStatus rin_image_decode_resource(
     uint64_t loaded_size = 0u;
 
     rin_image_clear_decode_output(pixels, pixel_capacity);
+    rin_image_clear_decode_scratch(scratch, scratch_capacity);
     if (source_size_out == NULL || probe_out == NULL) {
         if (source_size_out != NULL) *source_size_out = 0u;
         if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
