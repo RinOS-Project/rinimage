@@ -15,6 +15,7 @@ static int rin_image_png_limits_valid(const RinImageDecodeLimits* limits)
 
 static RinImageStatus rin_image_png_codec_status(int result)
 {
+    if (result == RPNG_ERR_LIMIT) return RIN_IMAGE_LIMIT;
     return result == RPNG_ERR_UNSUPPORTED ? RIN_IMAGE_UNSUPPORTED
                                           : RIN_IMAGE_MALFORMED;
 }
