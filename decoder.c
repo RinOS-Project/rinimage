@@ -734,6 +734,7 @@ RinImageStatus rin_image_decode_resource(
     RinImageStatus status;
     uint64_t loaded_size = 0u;
 
+    rin_image_clear_decode_output(pixels, pixel_capacity);
     if (source_size_out == NULL || probe_out == NULL) {
         if (source_size_out != NULL) *source_size_out = 0u;
         if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
