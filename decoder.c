@@ -4,6 +4,20 @@
 #include <limits.h>
 #include <string.h>
 
+/* A malformed or unsupported source may fail before its dimensions are
+ * known.  Keep failure cleanup bounded even when a caller supplied a very
+ * large arena; a failed decode never publishes any pixel prefix. */
+enum { RIN_IMAGE_FAILURE_SCRUB_BYTES = 64 * 1024 * 1024 };
+
+static void rin_image_clear_decode_output(uint32_t* pixels,
+                                          size_t pixel_capacity)
+{
+    size_t clear_pixels = RIN_IMAGE_FAILURE_SCRUB_BYTES / sizeof(uint32_t);
+    if (pixels == NULL || pixel_capacity == 0u) return;
+    if (pixel_capacity < clear_pixels) clear_pixels = pixel_capacity;
+    memset(pixels, 0, clear_pixels * sizeof(uint32_t));
+}
+
 #include "../ringif/ringif.h"
 #include "../rinjpeg/rinjpeg.h"
 #include "../rinpng/rpng.h"
@@ -579,6 +593,7 @@ RinImageStatus rin_image_decode_cancellable(
     size_t pixel_count;
     size_t output_bytes;
     if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
+    rin_image_clear_decode_output(pixels, pixel_capacity);
     if (pixels == NULL) return RIN_IMAGE_INVALID_ARGUMENT;
     status = rin_image_probe(data, source_bytes, limits, &probe);
     if (status != RIN_IMAGE_OK) return status;
