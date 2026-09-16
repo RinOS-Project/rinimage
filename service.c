@@ -35,7 +35,7 @@ typedef struct RinImageServicePollContext {
     RinImageStatus status;
 } RinImageServicePollContext;
 
-static void rin_image_service_clear_outputs(
+static void rin_image_service_clear_buffer_outputs(
     const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out)
 {
     size_t pixel_bytes = 0u;
@@ -59,9 +59,22 @@ static void rin_image_service_clear_outputs(
             ? request->scratch_capacity : RIN_IMAGE_SERVICE_MAX_OUTPUT;
         if (scratch_bytes != 0u) memset(request->scratch, 0, scratch_bytes);
     }
+}
+
+static void rin_image_service_clear_outputs(
+    const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out)
+{
+    size_t source_bytes = 0u;
+    rin_image_service_clear_buffer_outputs(request, frame_out);
     if (request->source != NULL && request->source_buffer != NULL &&
-        request->source->size <= RIN_IMAGE_SERVICE_MAX_SOURCE)
-        memset(request->source_buffer, 0, request->source->size);
+        request->source->size != 0u) {
+        source_bytes = request->source->size;
+        if (source_bytes > request->source_capacity)
+            source_bytes = request->source_capacity;
+        if (source_bytes > RIN_IMAGE_SERVICE_MAX_SOURCE)
+            source_bytes = RIN_IMAGE_SERVICE_MAX_SOURCE;
+        if (source_bytes != 0u) memset(request->source_buffer, 0, source_bytes);
+    }
 }
 
 static RinImageStatus rin_image_service_poll(
@@ -163,7 +176,10 @@ RinImageStatus rin_image_service_decode(
     status = rin_image_service_poll(&poll, 1);
     if (status == RIN_IMAGE_OK)
         status = rin_image_service_copy_source(request, &poll);
-    if (status != RIN_IMAGE_OK) return status;
+    if (status != RIN_IMAGE_OK) {
+        rin_image_service_clear_buffer_outputs(request, frame_out);
+        return status;
+    }
 
     memset(&probe, 0, sizeof(probe));
     status = rin_image_decode_cancellable(
@@ -173,12 +189,14 @@ RinImageStatus rin_image_service_decode(
         &probe);
     if (status != RIN_IMAGE_OK) {
         if (poll.status != RIN_IMAGE_OK) status = poll.status;
+        rin_image_service_clear_buffer_outputs(request, frame_out);
         return status;
     }
 
     pixel_bytes = (uint64_t)probe.size.width * (uint64_t)probe.size.height * 4u;
     if ((uint64_t)probe.size.width * 4u > UINT32_MAX ||
         pixel_bytes > SIZE_MAX) {
+        rin_image_service_clear_buffer_outputs(request, frame_out);
         return RIN_IMAGE_OVERFLOW;
     }
     memset(&frame, 0, sizeof(frame));
@@ -189,9 +207,15 @@ RinImageStatus rin_image_service_decode(
     frame.pixels = request->pixels;
     frame.pixel_bytes = (size_t)pixel_bytes;
     status = rin_image_frame_validate(&request->limits, &frame);
-    if (status != RIN_IMAGE_OK) return status;
+    if (status != RIN_IMAGE_OK) {
+        rin_image_service_clear_buffer_outputs(request, frame_out);
+        return status;
+    }
     status = rin_image_service_poll(&poll, 1);
-    if (status != RIN_IMAGE_OK) return status;
+    if (status != RIN_IMAGE_OK) {
+        rin_image_service_clear_buffer_outputs(request, frame_out);
+        return status;
+    }
     *frame_out = frame;
     return RIN_IMAGE_OK;
 }
