@@ -91,3 +91,19 @@ layout changes require coordinated updates to RinOS consumers. The codec
 sources are integrated by the RinOS parent build with `ringif`, `rinjpeg`,
 `rinpng`, and `rinwebp`. This repository has no standalone build or test
 target, so a parent build/test result must be reported separately.
+
+## Public API contract
+
+| Requirement | Contract |
+| --- | --- |
+| Purpose | Caller-buffer image probing and first-frame decoding to numeric ARGB pixels. |
+| Supported API | include/rinimage/decoder.h, image.h, service.h, and thumbnail_cache.h; see Supported API above. |
+| Unsupported API | Only the explicit per-format profiles above; no full-format, animation-playback, or metadata/color-management claim. |
+| ownership | Caller owns encoded input, output pixels, limits, and scratch; resource access uses caller callback. |
+| thread-safety | Independent buffers may be used concurrently; shared output/scratch must be serialized. WebP diagnostics are process-global. |
+| limits | See limits above for shared input/pixel/output bounds and codec-local limits. |
+| errors | RinImageStatus reports malformed, unsupported, limit, overflow, cancellation, authorization, and resource-service failures. |
+| ABI stability | Public C source interface without separately versioned binary ABI; coordinated rebuild needed for layout changes. |
+| security | Input is untrusted; wrapper bounds admission but gives no universal CPU deadline or zero-allocation guarantee. |
+| build | Integrated through RinOS parent build; no standalone build target. |
+| test | Parent sanitizer CI fuzzes the common probe/decode path; no standalone test target. No tests/builds run for this README update. |
