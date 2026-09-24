@@ -76,6 +76,13 @@ failed buffer as a partial image. The common wrapper bounds allocation and
 output admission, but individual codecs may allocate temporary memory, so
 this API does not claim zero-allocation or a universal CPU deadline.
 
+The parent repository's sanitizer CI builds a deterministic seed corpus for
+PNG, JPEG, GIF, WebP, BMP, ICO/CUR, TGA, and PPM and fuzzes the common probe and
+decode path. That target caps input at 1 MiB, dimensions at 1024 by 1024,
+canonical output at 4 MiB, process RSS at 512 MiB, and each fuzz input at two
+seconds. These host-fuzz limits complement the caller-selected production
+limits; they do not add a wall-clock deadline to a production decode call.
+
 ## ABI, build, and tests
 
 The C headers and their struct layouts are the public source interface. This
