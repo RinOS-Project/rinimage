@@ -21,8 +21,8 @@ static void rin_image_clear_decode_output(uint32_t* pixels,
 static void rin_image_clear_decode_scratch(uint8_t* scratch,
                                            size_t scratch_capacity)
 {
-    size_t clear_bytes = scratch_capacity < RIN_IMAGE_FAILURE_SCRUB_BYTES
-        ? scratch_capacity : RIN_IMAGE_FAILURE_SCRUB_BYTES;
+    size_t clear_bytes = scratch_capacity < (size_t)RIN_IMAGE_FAILURE_SCRUB_BYTES
+        ? scratch_capacity : (size_t)RIN_IMAGE_FAILURE_SCRUB_BYTES;
     if (scratch == NULL || clear_bytes == 0u) return;
     memset(scratch, 0, clear_bytes);
 }
