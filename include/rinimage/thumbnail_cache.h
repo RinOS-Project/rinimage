@@ -154,7 +154,13 @@ static inline uint64_t rin_image_thumbnail_cache_touch(
 static inline uint64_t rin_image_thumbnail_cache_sequence(
     RinImageThumbnailCacheV1* cache)
 {
-    if (cache->next_sequence == UINT64_MAX) cache->next_sequence = 0u;
+    uint32_t index;
+    if (cache->next_sequence == UINT64_MAX) {
+        for (index = 0u; index < RIN_IMAGE_THUMBNAIL_CACHE_MAX_REQUESTS;
+             ++index)
+            if (cache->pending[index].state != 0u) return 0u;
+        cache->next_sequence = 0u;
+    }
     return ++cache->next_sequence;
 }
 
@@ -435,6 +441,7 @@ rin_image_thumbnail_cache_submit(RinImageThumbnailCacheV1* cache,
     uint32_t index;
     int existing;
     uint64_t request_id;
+    uint64_t sequence;
     if (request_id_out != NULL) *request_id_out = 0u;
     if (cache == NULL || request_id_out == NULL ||
         !rin_image_thumbnail_cache_key_valid(key))
@@ -453,12 +460,14 @@ rin_image_thumbnail_cache_submit(RinImageThumbnailCacheV1* cache,
         if (cache->pending[index].state == 0u) break;
     if (index == RIN_IMAGE_THUMBNAIL_CACHE_MAX_REQUESTS)
         return RIN_IMAGE_THUMBNAIL_CACHE_QUEUE_FULL;
+    sequence = rin_image_thumbnail_cache_sequence(cache);
+    if (sequence == 0u) return RIN_IMAGE_THUMBNAIL_CACHE_BUSY;
     request_id = rin_image_thumbnail_cache_request_id(cache);
     if (request_id == 0u) return RIN_IMAGE_THUMBNAIL_CACHE_QUEUE_FULL;
     cache->pending[index].request.request_id = request_id;
     cache->pending[index].request.key = *key;
     cache->pending[index].request.priority = priority;
-    cache->pending[index].sequence = rin_image_thumbnail_cache_sequence(cache);
+    cache->pending[index].sequence = sequence;
     cache->pending[index].state = 1u;
     *request_id_out = request_id;
     return RIN_IMAGE_THUMBNAIL_CACHE_OK;
