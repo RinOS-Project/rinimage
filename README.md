@@ -31,7 +31,7 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
 | BMP | Windows DIB header size 40 bytes or greater, uncompressed `BI_RGB`, 24- or 32-bit pixels, top-down or bottom-up rows. | Palettes, bitfields, RLE, and other compression modes are unsupported. For 32-bit input the stored fourth byte is copied as alpha. |
 | ICO/CUR | First directory entry only; embedded PNG or uncompressed 24/32-bit DIB payload. | Other entries, compressed DIBs, and other embedded formats are unsupported. |
 | TGA | Unmapped, uncompressed true-color image type 2, 24 or 32 bits per pixel; both row origins are handled. | Color maps, RLE, grayscale, and other TGA image types are unsupported. |
-| PPM | P3 ASCII and P6 binary RGB with `maxval` exactly 255. | Other Netpbm variants, bit depths, and max values are unsupported. |
+| PPM | P3 ASCII and P6 binary RGB with `maxval` exactly 255; P6 accepts a CRLF line terminator before the raster. | Other Netpbm variants, bit depths, and max values are unsupported. |
 
 `RinImageFormat` also has `UNKNOWN`; it is not decodable. Successful probe of
 an animated GIF or WebP does not mean that the decode API returns every frame.

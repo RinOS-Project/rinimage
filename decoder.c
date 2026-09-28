@@ -133,7 +133,13 @@ static RinImageStatus rin_image_ppm_header(const uint8_t* data, size_t size,
          * would silently eat valid image data. */
         if (pos >= size || !rin_image_ascii_space(data[pos]))
             return RIN_IMAGE_MALFORMED;
-        *payload_offset = pos + 1u;
+        /* CRLF is one line terminator.  Consume the pair together without
+         * treating arbitrary raster whitespace as header padding: the first
+         * binary pixel byte is allowed to be whitespace or '#'. */
+        if (data[pos] == '\r' && pos + 1u < size && data[pos + 1u] == '\n')
+            *payload_offset = pos + 2u;
+        else
+            *payload_offset = pos + 1u;
     } else {
         *payload_offset = pos;
     }
