@@ -749,6 +749,7 @@ RinImageStatus rin_image_decode_resource(
     RinResourceCatalogStatus resource_status;
     RinImageStatus status;
     uint64_t loaded_size = 0u;
+    size_t load_capacity = source_capacity;
 
     rin_image_clear_decode_output(pixels, pixel_capacity);
     rin_image_clear_decode_scratch(scratch, scratch_capacity);
@@ -759,12 +760,16 @@ RinImageStatus rin_image_decode_resource(
     }
     *source_size_out = 0u;
     memset(probe_out, 0, sizeof(*probe_out));
+    if (!rin_image_limits_valid(limits))
+        return RIN_IMAGE_INVALID_ARGUMENT;
     if (source_capacity != 0u && source == NULL)
         return RIN_IMAGE_INVALID_ARGUMENT;
+    if (limits->max_source_bytes < load_capacity)
+        load_capacity = limits->max_source_bytes;
 
     resource_status = rin_resource_catalog_load(
         catalog, RIN_RESOURCE_CATALOG_TYPE_IMAGE, resource_id, read_path,
-        context, source, (uint64_t)source_capacity, &loaded_size);
+        context, source, (uint64_t)load_capacity, &loaded_size);
     status = rin_image_resource_status(resource_status);
     if (status != RIN_IMAGE_OK || loaded_size > SIZE_MAX || loaded_size == 0u)
         return status == RIN_IMAGE_OK ? RIN_IMAGE_MALFORMED : status;
