@@ -762,7 +762,7 @@ RinImageStatus rin_image_decode_resource(
     memset(probe_out, 0, sizeof(*probe_out));
     if (!rin_image_limits_valid(limits))
         return RIN_IMAGE_INVALID_ARGUMENT;
-    if (source_capacity != 0u && source == NULL)
+    if (source == NULL || source_capacity == 0u)
         return RIN_IMAGE_INVALID_ARGUMENT;
     if (limits->max_source_bytes < load_capacity)
         load_capacity = limits->max_source_bytes;

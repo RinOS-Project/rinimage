@@ -16,7 +16,8 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
   scratch storage.
 - `rin_image_decode_png` is the PNG-only bounded entry point.
 - `rin_image_decode_resource` reads a catalogued image through the caller's
-  path-read callback. The codec itself does not open files or resolve paths.
+  path-read callback. It rejects null or zero-capacity source storage before
+  the callback; the codec itself does not open files or resolve paths.
 - `rin_image_decode_limits_default`, `rin_image_validate_decode`, and frame
   validation functions provide the common admission contract.
 
