@@ -243,6 +243,11 @@ RinImageStatus rin_image_frame_validate(const RinImageDecodeLimits* limits,
     if ((uint64_t)frame->stride_bytes <
         (uint64_t)frame->size.width * 4u)
         return RIN_IMAGE_MALFORMED;
+    /* Pixels are published as uint32_t words.  A byte stride that is not
+     * word-aligned cannot describe the next row without truncating the
+     * offset in consumers that advance by uint32_t elements. */
+    if (frame->stride_bytes % sizeof(uint32_t) != 0u)
+        return RIN_IMAGE_MALFORMED;
     if ((uint64_t)frame->stride_bytes * (uint64_t)frame->size.height >
         (uint64_t)SIZE_MAX)
         return RIN_IMAGE_OVERFLOW;
