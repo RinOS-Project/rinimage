@@ -32,6 +32,24 @@ static void rin_image_clear_decode_scratch(uint8_t* scratch,
 #include "../rinpng/rpng.h"
 #include "../rinwebp/src/webp/decode.h"
 
+typedef struct RinImageWebPCancellation {
+    RinImageCancellationFunction callback;
+    void* context;
+    int cancelled;
+} RinImageWebPCancellation;
+
+static int rin_image_webp_cancelled(void* opaque)
+{
+    RinImageWebPCancellation* state = (RinImageWebPCancellation*)opaque;
+    if (state == NULL) return 0;
+    if (state->cancelled) return 1;
+    if (state->callback != NULL && state->callback(state->context)) {
+        state->cancelled = 1;
+        return 1;
+    }
+    return 0;
+}
+
 static int rin_image_limits_valid(const RinImageDecodeLimits* limits)
 {
     return limits != NULL && limits->max_source_bytes != 0u &&
@@ -442,8 +460,18 @@ static RinImageStatus rin_image_probe_cancellable(
     } else if (source_bytes >= 12u && data[0] == 'R' && data[1] == 'I' &&
                data[2] == 'F' && data[3] == 'F' && data[8] == 'W' &&
                data[9] == 'E' && data[10] == 'B' && data[11] == 'P') {
-        if (!WebPGetInfo(data, source_bytes, &width, &height))
+        RinImageWebPCancellation webp_cancellation = {
+            cancellation, cancellation_context, 0
+        };
+        if (!WebPGetInfoWithCancellation(data, source_bytes, &width, &height,
+                                         cancellation != NULL
+                                             ? rin_image_webp_cancelled : NULL,
+                                         cancellation != NULL
+                                             ? &webp_cancellation : NULL)) {
+            if (webp_cancellation.cancelled)
+                return RIN_IMAGE_CANCELLED;
             return RIN_IMAGE_MALFORMED;
+        }
         probe->format = RIN_IMAGE_FORMAT_WEBP;
         probe->size.width = (uint32_t)width;
         probe->size.height = (uint32_t)height;
@@ -689,11 +717,18 @@ RinImageStatus rin_image_decode_cancellable(
         break;
     case RIN_IMAGE_FORMAT_WEBP: {
         size_t index;
+        RinImageWebPCancellation webp_cancellation = {
+            cancellation, cancellation_context, 0
+        };
         if (scratch == NULL || scratch_capacity < output_bytes)
             return RIN_IMAGE_LIMIT;
-        if (WebPDecodeBGRAInto(data, source_bytes, scratch, output_bytes,
-                               (int)probe.size.width * 4) == NULL) {
-            status = RIN_IMAGE_MALFORMED;
+        if (WebPDecodeBGRAIntoWithCancellation(
+                data, source_bytes, scratch, output_bytes,
+                (int)probe.size.width * 4,
+                cancellation != NULL ? rin_image_webp_cancelled : NULL,
+                cancellation != NULL ? &webp_cancellation : NULL) == NULL) {
+            status = webp_cancellation.cancelled
+                ? RIN_IMAGE_CANCELLED : RIN_IMAGE_MALFORMED;
             break;
         }
         if (cancellation != NULL && cancellation(cancellation_context)) {
@@ -742,6 +777,12 @@ RinImageStatus rin_image_decode_cancellable(
         status = RIN_IMAGE_CANCELLED;
     if (status != RIN_IMAGE_OK) {
         memset(pixels, 0, output_bytes);
+        if (probe.format == RIN_IMAGE_FORMAT_WEBP && scratch != NULL &&
+            scratch_capacity >= output_bytes) {
+            memset(scratch, 0, output_bytes);
+        } else {
+            rin_image_clear_decode_scratch(scratch, scratch_capacity);
+        }
         return status;
     }
 

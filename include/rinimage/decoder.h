@@ -86,9 +86,9 @@ RinImageStatus rin_image_decode_resource(
     const RinImageDecodeLimits* limits, uint32_t* pixels, size_t pixel_capacity,
     uint8_t* scratch, size_t scratch_capacity, RinImageProbe* probe_out);
 
-/* Cancellation-aware form used by a service owner.  The callback is polled
- * at admission, codec boundaries, and bounded row/plane loops; it never owns
- * decoder state and a cancellation result publishes no frame. */
+/* Cancellation-aware form used by a service owner. The callback is polled
+ * during supported codec parsing, decode, and bounded row/plane processing;
+ * it never owns decoder state and cancellation publishes no frame. */
 RinImageStatus rin_image_decode_cancellable(
     const uint8_t* data, size_t source_bytes,
     const RinImageDecodeLimits* limits, uint32_t* pixels,
