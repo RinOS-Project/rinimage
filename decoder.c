@@ -193,10 +193,17 @@ typedef struct RinImageIconPayload {
     int png;
 } RinImageIconPayload;
 
+static RinImageStatus rin_image_probe_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, RinImageProbe* probe,
+    RinImageCancellationFunction cancellation, void* cancellation_context);
+
 static RinImageStatus rin_image_icon_payload(const uint8_t* data, size_t size,
                                              RinImageProbe* probe,
                                              RinImageIconPayload* payload,
-                                             const RinImageDecodeLimits* limits)
+                                             const RinImageDecodeLimits* limits,
+                                             RinImageCancellationFunction cancellation,
+                                             void* cancellation_context)
 {
     uint16_t type;
     uint16_t count;
@@ -225,7 +232,9 @@ static RinImageStatus rin_image_icon_payload(const uint8_t* data, size_t size,
     image = data + image_offset;
     if (image_size >= 8u && image[0] == 0x89u && image[1] == 'P' &&
         image[2] == 'N' && image[3] == 'G') {
-        status = rin_image_probe(image, image_size, limits, &nested);
+        status = rin_image_probe_cancellable(
+            image, image_size, limits, &nested, cancellation,
+            cancellation_context);
         if (status != RIN_IMAGE_OK) return status;
         payload->data = image;
         payload->size = image_size;
@@ -272,6 +281,9 @@ static RinImageStatus rin_image_icon_payload(const uint8_t* data, size_t size,
 
 static RinImageStatus rin_image_codec_status(int result, int unsupported)
 {
+    if (result == RJPEG_CANCELLED || result == RGIF_CANCELLED ||
+        result == RPNG_ERR_DEADLINE)
+        return RIN_IMAGE_CANCELLED;
     if (result == unsupported) return RIN_IMAGE_UNSUPPORTED;
     return RIN_IMAGE_MALFORMED;
 }
@@ -357,9 +369,10 @@ static RinImageStatus rin_image_probe_bmp(const uint8_t* data, size_t size,
     return RIN_IMAGE_OK;
 }
 
-RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
-                               const RinImageDecodeLimits* limits,
-                               RinImageProbe* probe)
+static RinImageStatus rin_image_probe_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, RinImageProbe* probe,
+    RinImageCancellationFunction cancellation, void* cancellation_context)
 {
     int width = 0;
     int height = 0;
@@ -370,6 +383,8 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
         return RIN_IMAGE_INVALID_ARGUMENT;
     memset(probe, 0, sizeof(*probe));
     if (source_bytes > limits->max_source_bytes) return RIN_IMAGE_LIMIT;
+    if (cancellation != NULL && cancellation(cancellation_context))
+        return RIN_IMAGE_CANCELLED;
 
     if (source_bytes >= 6u && data[0] == 0u && data[1] == 0u &&
         (data[2] == 1u || data[2] == 2u) && data[3] == 0u &&
@@ -378,7 +393,8 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
             (uint64_t)source_bytes) {
         RinImageIconPayload payload;
         status = rin_image_icon_payload(data, source_bytes, probe, &payload,
-                                         limits);
+                                         limits, cancellation,
+                                         cancellation_context);
     } else if (source_bytes >= 2u && data[0] == 'P' &&
                (data[1] == '3' || data[1] == '6')) {
         int ascii = 0;
@@ -393,7 +409,9 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
     } else if (source_bytes >= 2u && data[0] == 'B' && data[1] == 'M') {
         status = rin_image_probe_bmp(data, source_bytes, probe);
     } else if (source_bytes >= 2u && data[0] == 0xffu && data[1] == 0xd8u) {
-        const int result = rjpeg_get_info(data, source_bytes, &width, &height);
+        const int result = rjpeg_get_info_cancellable(
+            data, source_bytes, &width, &height, cancellation,
+            cancellation_context);
         if (result != RJPEG_OK)
             return rin_image_codec_status(result, RJPEG_UNSUPPORTED);
         probe->format = RIN_IMAGE_FORMAT_JPEG;
@@ -404,8 +422,9 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
         status = RIN_IMAGE_OK;
     } else if (source_bytes >= 3u && data[0] == 'G' && data[1] == 'I' &&
                data[2] == 'F') {
-        const int result = rgif_get_info(data, source_bytes, &width, &height,
-                                         &frames);
+        const int result = rgif_get_info_cancellable(
+            data, source_bytes, &width, &height, &frames, cancellation,
+            cancellation_context);
         if (result != RGIF_OK)
             return rin_image_codec_status(result, RGIF_UNSUPPORTED);
         probe->format = RIN_IMAGE_FORMAT_GIF;
@@ -417,7 +436,9 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
         status = RIN_IMAGE_OK;
     } else if (source_bytes >= 4u && data[0] == 0x89u && data[1] == 'P' &&
                data[2] == 'N' && data[3] == 'G') {
-        status = rin_image_probe_png(data, source_bytes, limits, probe);
+        status = rin_image_probe_png_cancellable(
+            data, source_bytes, limits, probe, cancellation,
+            cancellation_context);
     } else if (source_bytes >= 12u && data[0] == 'R' && data[1] == 'I' &&
                data[2] == 'F' && data[3] == 'F' && data[8] == 'W' &&
                data[9] == 'E' && data[10] == 'B' && data[11] == 'P') {
@@ -433,7 +454,17 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
         return RIN_IMAGE_UNSUPPORTED;
     }
     if (status != RIN_IMAGE_OK) return status;
+    if (cancellation != NULL && cancellation(cancellation_context))
+        return RIN_IMAGE_CANCELLED;
     return rin_image_admit(limits, source_bytes, probe);
+}
+
+RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
+                               const RinImageDecodeLimits* limits,
+                               RinImageProbe* probe)
+{
+    return rin_image_probe_cancellable(data, source_bytes, limits, probe,
+                                       NULL, NULL);
 }
 
 static RinImageStatus rin_image_decode_bmp(const uint8_t* data, size_t size,
@@ -569,7 +600,9 @@ static RinImageStatus rin_image_decode_icon(
     RinImageIconPayload payload;
     RinImageProbe checked = {};
     RinImageStatus status = rin_image_icon_payload(data, size, &checked,
-                                                   &payload, limits);
+                                                   &payload, limits,
+                                                   cancellation,
+                                                   cancellation_context);
     size_t y;
     if (status != RIN_IMAGE_OK) return status;
     if (payload.width != probe->size.width || payload.height != probe->size.height)
@@ -611,7 +644,9 @@ RinImageStatus rin_image_decode_cancellable(
     rin_image_clear_decode_output(pixels, pixel_capacity);
     rin_image_clear_decode_scratch(scratch, scratch_capacity);
     if (pixels == NULL) return RIN_IMAGE_INVALID_ARGUMENT;
-    status = rin_image_probe(data, source_bytes, limits, &probe);
+    status = rin_image_probe_cancellable(
+        data, source_bytes, limits, &probe, cancellation,
+        cancellation_context);
     if (status != RIN_IMAGE_OK) return status;
     pixel_count = (size_t)probe.size.width * (size_t)probe.size.height;
     output_bytes = pixel_count * sizeof(uint32_t);
@@ -624,23 +659,33 @@ RinImageStatus rin_image_decode_cancellable(
 
     switch (probe.format) {
     case RIN_IMAGE_FORMAT_JPEG:
-        if (rjpeg_decode(data, source_bytes, pixels, pixel_capacity,
-                         (int)probe.size.width, (int)probe.size.height) != RJPEG_OK)
-            status = RIN_IMAGE_MALFORMED;
-        else
-            status = RIN_IMAGE_OK;
+        {
+            const int result = rjpeg_decode_cancellable(
+                data, source_bytes, pixels, pixel_capacity,
+                (int)probe.size.width, (int)probe.size.height,
+                cancellation, cancellation_context);
+            status = result == RJPEG_OK ? RIN_IMAGE_OK
+                : result == RJPEG_CANCELLED ? RIN_IMAGE_CANCELLED
+                : rin_image_codec_status(result, RJPEG_UNSUPPORTED);
+        }
         break;
     case RIN_IMAGE_FORMAT_GIF:
         if (scratch == NULL || scratch_capacity < pixel_count)
             return RIN_IMAGE_LIMIT;
-        status = rgif_decode(data, source_bytes, pixels,
-                             (int)probe.size.width, (int)probe.size.height,
-                             scratch, scratch_capacity) == RGIF_OK
-                     ? RIN_IMAGE_OK : RIN_IMAGE_MALFORMED;
+        {
+            const int result = rgif_decode_cancellable(
+                data, source_bytes, pixels, (int)probe.size.width,
+                (int)probe.size.height, scratch, scratch_capacity,
+                cancellation, cancellation_context);
+            status = result == RGIF_OK ? RIN_IMAGE_OK
+                : result == RGIF_CANCELLED ? RIN_IMAGE_CANCELLED
+                : rin_image_codec_status(result, RGIF_UNSUPPORTED);
+        }
         break;
     case RIN_IMAGE_FORMAT_PNG:
-        status = rin_image_decode_png(data, source_bytes, limits, pixels,
-                                      pixel_capacity, NULL);
+        status = rin_image_decode_png_cancellable(
+            data, source_bytes, limits, pixels, pixel_capacity, cancellation,
+            cancellation_context, NULL);
         break;
     case RIN_IMAGE_FORMAT_WEBP: {
         size_t index;
@@ -651,13 +696,22 @@ RinImageStatus rin_image_decode_cancellable(
             status = RIN_IMAGE_MALFORMED;
             break;
         }
+        if (cancellation != NULL && cancellation(cancellation_context)) {
+            status = RIN_IMAGE_CANCELLED;
+            break;
+        }
         for (index = 0u; index < pixel_count; ++index) {
+            if ((index & 4095u) == 0u && cancellation != NULL &&
+                cancellation(cancellation_context)) {
+                status = RIN_IMAGE_CANCELLED;
+                break;
+            }
             const uint8_t* bgra = scratch + index * 4u;
             pixels[index] = ((uint32_t)bgra[3] << 24u) |
                             ((uint32_t)bgra[2] << 16u) |
                             ((uint32_t)bgra[1] << 8u) | bgra[0];
         }
-        status = RIN_IMAGE_OK;
+        if (status != RIN_IMAGE_CANCELLED) status = RIN_IMAGE_OK;
         break;
     }
     case RIN_IMAGE_FORMAT_BMP:

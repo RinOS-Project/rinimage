@@ -40,12 +40,24 @@ typedef int (*RinImageCancellationFunction)(void* context);
 RinImageStatus rin_image_probe_png(const uint8_t* data, size_t source_bytes,
                                    const RinImageDecodeLimits* limits,
                                    RinImageProbe* probe_out);
+RinImageStatus rin_image_probe_png_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, RinImageProbe* probe_out,
+    RinImageCancellationFunction cancellation, void* cancellation_context);
 
 /* Decode a bounded PNG into canonical ARGB words. */
 RinImageStatus rin_image_decode_png(const uint8_t* data, size_t source_bytes,
                                     const RinImageDecodeLimits* limits,
                                     uint32_t* pixels, size_t pixel_capacity,
                                     RinImageProbe* probe_out);
+
+/* Deadline/cancellation-aware bounded PNG decode.  Cancellation is polled by
+ * the PNG parser, inflate, unfilter, and pixel conversion loops. */
+RinImageStatus rin_image_decode_png_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, uint32_t* pixels,
+    size_t pixel_capacity, RinImageCancellationFunction cancellation,
+    void* cancellation_context, RinImageProbe* probe_out);
 
 /* Probe and validate an untrusted encoded image without allocating. */
 RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,

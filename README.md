@@ -15,6 +15,9 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
   frame into caller-owned ARGB8888 storage. GIF and WebP require caller-owned
   scratch storage.
 - `rin_image_decode_png` is the PNG-only bounded entry point.
+- `rin_image_probe_png_cancellable` and
+  `rin_image_decode_png_cancellable` pass a caller cancellation predicate into
+  the RinPNG deadline API.
 - `rin_image_decode_resource` reads a catalogued image through the caller's
   path-read callback. It rejects null or zero-capacity source storage before
   the callback; the codec itself does not open files or resolve paths.
@@ -26,8 +29,8 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
 | Format | Implemented profile | Deliberate boundary |
 | --- | --- | --- |
 | PNG | Static PNG; color types 0, 2, 3, 4, and 6; legal 1/2/4/8/16-bit combinations; Adam7; palette and `tRNS`; chunk CRC validation. | APNG animation is not decoded. Ancillary metadata is not exposed as an image color-management or metadata API. |
-| JPEG | 8-bit baseline sequential DCT (SOF0), grayscale or three components, with 4:4:4, 4:2:2, or 4:2:0 sampling. | Progressive SOF2, other JPEG processes, precision, component counts, and sampling layouts are not supported. |
-| GIF | GIF87a/GIF89a structure and LZW; probe reports frame count; decode returns the first image descriptor only, including interlaced first frames. | This is not an animation player: later frames, timing, disposal compositing, and animation controls are not returned. Transparent first-frame pixels leave the logical-screen background in the opaque output. |
+| JPEG | 8-bit baseline sequential DCT (SOF0), grayscale or three components, with 4:4:4, 4:2:2, or 4:2:0 sampling. Cancellation is polled during marker parsing, MCU rows, and output rows. | Progressive SOF2, other JPEG processes, precision, component counts, and sampling layouts are not supported. |
+| GIF | GIF87a/GIF89a structure and LZW; probe reports frame count; decode returns the first image descriptor only, including interlaced first frames. Cancellation is polled during block scanning, LZW, palette validation, and output rows. | This is not an animation player: later frames, timing, disposal compositing, and animation controls are not returned. Transparent first-frame pixels leave the logical-screen background in the opaque output. |
 | WebP | VP8 lossy and VP8L lossless payloads, VP8X container metadata needed by the decoder, supported `ALPH` modes, and first `ANMF` frame. | Only the first animation frame is decoded. The API does not expose a complete animation timeline or ICC/EXIF/XMP metadata contract. |
 | BMP | Windows DIB header size 40 bytes or greater, uncompressed `BI_RGB`, 24- or 32-bit pixels, top-down or bottom-up rows. | Palettes, bitfields, RLE, and other compression modes are unsupported. For 32-bit input the stored fourth byte is copied as alpha. |
 | ICO/CUR | First directory entry only; embedded PNG or uncompressed 24/32-bit DIB payload. | Other entries, compressed DIBs, and other embedded formats are unsupported. |
@@ -74,8 +77,11 @@ calling surface, provide buffers that match those limits, and use the
 cancellation-aware entry point when the owner has a cancellation source.
 Failure clears the bounded output/scratch prefix; callers must not treat a
 failed buffer as a partial image. The common wrapper bounds allocation and
-output admission, but individual codecs may allocate temporary memory, so
-this API does not claim zero-allocation or a universal CPU deadline.
+output admission. Cancellable PNG/JPEG/GIF paths poll inside their parsing and
+decode loops. WebP currently checks cancellation before and after its
+synchronous codec call and during output conversion, but cannot interrupt
+compressed WebP decode or its dimension/container scan; that gap remains in
+TODO. The API does not claim zero-allocation or a universal CPU deadline.
 
 The parent repository's sanitizer CI builds a deterministic seed corpus for
 PNG, JPEG, GIF, WebP, BMP, ICO/CUR, TGA, and PPM and fuzzes the common probe and
@@ -98,13 +104,13 @@ target, so a parent build/test result must be reported separately.
 | Requirement | Contract |
 | --- | --- |
 | Purpose | Caller-buffer image probing and first-frame decoding to numeric ARGB pixels. |
-| Supported API | include/rinimage/decoder.h, image.h, service.h, and thumbnail_cache.h; see Supported API above. |
+| Supported API | include/rinimage/decoder.h, image.h, service.h, and thumbnail_cache.h; see Supported API above, including the PNG-only cancellable probe/decode entries. |
 | Unsupported API | Only the explicit per-format profiles above; no full-format, animation-playback, or metadata/color-management claim. |
 | ownership | Caller owns encoded input, output pixels, limits, and scratch; resource access uses caller callback. |
 | thread-safety | Independent buffers may be used concurrently; shared output/scratch must be serialized. WebP diagnostics are process-global. |
 | limits | See limits above for shared input/pixel/output bounds and codec-local limits. |
 | errors | RinImageStatus reports malformed, unsupported, limit, overflow, cancellation, authorization, and resource-service failures. |
 | ABI stability | Public C source interface without separately versioned binary ABI; coordinated rebuild needed for layout changes. |
-| security | Input is untrusted; wrapper bounds admission but gives no universal CPU deadline or zero-allocation guarantee. |
+| security | Input is untrusted; wrapper bounds admission, but WebP remains synchronously non-interruptible and no universal CPU deadline or zero-allocation guarantee is published. |
 | build | Integrated through RinOS parent build; no standalone build target. |
 | test | Parent sanitizer CI fuzzes the common probe/decode path; no standalone test target. No tests/builds run for this README update. |

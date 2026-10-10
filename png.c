@@ -16,6 +16,7 @@ static int rin_image_png_limits_valid(const RinImageDecodeLimits* limits)
 static RinImageStatus rin_image_png_codec_status(int result)
 {
     if (result == RPNG_ERR_LIMIT) return RIN_IMAGE_LIMIT;
+    if (result == RPNG_ERR_DEADLINE) return RIN_IMAGE_CANCELLED;
     return result == RPNG_ERR_UNSUPPORTED ? RIN_IMAGE_UNSUPPORTED
                                           : RIN_IMAGE_MALFORMED;
 }
@@ -29,9 +30,10 @@ static int rin_image_png_signature(const uint8_t* data, size_t size)
            memcmp(data, signature, sizeof(signature)) == 0;
 }
 
-RinImageStatus rin_image_probe_png(const uint8_t* data, size_t source_bytes,
-                                   const RinImageDecodeLimits* limits,
-                                   RinImageProbe* probe_out)
+RinImageStatus rin_image_probe_png_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, RinImageProbe* probe_out,
+    RinImageCancellationFunction cancellation, void* cancellation_context)
 {
     int width = 0;
     int height = 0;
@@ -47,7 +49,8 @@ RinImageStatus rin_image_probe_png(const uint8_t* data, size_t source_bytes,
     if (!rin_image_png_signature(data, source_bytes))
         return RIN_IMAGE_UNSUPPORTED;
 
-    result = rpng_get_info(data, source_bytes, &width, &height);
+    result = rpng_get_info_with_deadline(data, source_bytes, &width, &height,
+                                         cancellation, cancellation_context);
     if (result != RPNG_OK) return rin_image_png_codec_status(result);
     if (width <= 0 || height <= 0) return RIN_IMAGE_MALFORMED;
 
@@ -63,20 +66,35 @@ RinImageStatus rin_image_probe_png(const uint8_t* data, size_t source_bytes,
     return status;
 }
 
-RinImageStatus rin_image_decode_png(const uint8_t* data, size_t source_bytes,
-                                    const RinImageDecodeLimits* limits,
-                                    uint32_t* pixels, size_t pixel_capacity,
-                                    RinImageProbe* probe_out)
+RinImageStatus rin_image_probe_png(const uint8_t* data, size_t source_bytes,
+                                   const RinImageDecodeLimits* limits,
+                                   RinImageProbe* probe_out)
+{
+    return rin_image_probe_png_cancellable(
+        data, source_bytes, limits, probe_out, NULL, NULL);
+}
+
+RinImageStatus rin_image_decode_png_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, uint32_t* pixels,
+    size_t pixel_capacity, RinImageCancellationFunction cancellation,
+    void* cancellation_context, RinImageProbe* probe_out)
 {
     RinImageProbe probe = {};
     RinImageFrame frame = {};
     RinImageStatus status;
+    int decode_result;
     uint64_t pixel_count;
     size_t pixel_bytes;
 
     if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
     if (pixels == NULL) return RIN_IMAGE_INVALID_ARGUMENT;
-    status = rin_image_probe_png(data, source_bytes, limits, &probe);
+    if (pixel_capacity > (size_t)(64u * 1024u * 1024u) / sizeof(uint32_t))
+        memset(pixels, 0, 64u * 1024u * 1024u);
+    else
+        memset(pixels, 0, pixel_capacity * sizeof(uint32_t));
+    status = rin_image_probe_png_cancellable(
+        data, source_bytes, limits, &probe, cancellation, cancellation_context);
     if (status != RIN_IMAGE_OK) return status;
 
     pixel_count = (uint64_t)probe.size.width * (uint64_t)probe.size.height;
@@ -84,10 +102,12 @@ RinImageStatus rin_image_decode_png(const uint8_t* data, size_t source_bytes,
         pixel_count > (uint64_t)pixel_capacity)
         return RIN_IMAGE_LIMIT;
     pixel_bytes = (size_t)pixel_count * sizeof(uint32_t);
-    if (rpng_decode_rgba(data, source_bytes, pixels, (int)probe.size.width,
-                         (int)probe.size.height) != RPNG_OK) {
+    decode_result = rpng_decode_rgba_with_deadline(
+        data, source_bytes, pixels, (int)probe.size.width,
+        (int)probe.size.height, cancellation, cancellation_context);
+    if (decode_result != RPNG_OK) {
         memset(pixels, 0, pixel_bytes);
-        return RIN_IMAGE_MALFORMED;
+        return rin_image_png_codec_status(decode_result);
     }
 
     frame.size = probe.size;
@@ -103,4 +123,14 @@ RinImageStatus rin_image_decode_png(const uint8_t* data, size_t source_bytes,
     }
     if (probe_out != NULL) *probe_out = probe;
     return RIN_IMAGE_OK;
+}
+
+RinImageStatus rin_image_decode_png(const uint8_t* data, size_t source_bytes,
+                                    const RinImageDecodeLimits* limits,
+                                    uint32_t* pixels, size_t pixel_capacity,
+                                    RinImageProbe* probe_out)
+{
+    return rin_image_decode_png_cancellable(
+        data, source_bytes, limits, pixels, pixel_capacity, NULL, NULL,
+        probe_out);
 }
