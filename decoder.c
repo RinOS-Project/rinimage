@@ -75,36 +75,52 @@ static int rin_image_ascii_space(uint8_t value)
            value == '\f' || value == '\v';
 }
 
-static int rin_image_ppm_skip(const uint8_t* data, size_t size, size_t* pos)
+static RinImageStatus rin_image_ppm_skip(
+    const uint8_t* data, size_t size, size_t* pos,
+    RinImageCancellationFunction cancellation, void* cancellation_context)
 {
     while (*pos < size) {
+        if (((*pos & 4095u) == 0u) && cancellation != NULL &&
+            cancellation(cancellation_context))
+            return RIN_IMAGE_CANCELLED;
         if (rin_image_ascii_space(data[*pos])) {
             ++*pos;
             continue;
         }
         if (data[*pos] == '#') {
-            while (*pos < size && data[*pos] != '\n') ++*pos;
+            while (*pos < size && data[*pos] != '\n') {
+                if (((*pos & 4095u) == 0u) && cancellation != NULL &&
+                    cancellation(cancellation_context))
+                    return RIN_IMAGE_CANCELLED;
+                ++*pos;
+            }
             continue;
         }
         break;
     }
-    return *pos < size;
+    return *pos < size ? RIN_IMAGE_OK : RIN_IMAGE_MALFORMED;
 }
 
-static int rin_image_ppm_token(const uint8_t* data, size_t size, size_t* pos,
-                               char* token, size_t token_capacity)
+static RinImageStatus rin_image_ppm_token(
+    const uint8_t* data, size_t size, size_t* pos, char* token,
+    size_t token_capacity, RinImageCancellationFunction cancellation,
+    void* cancellation_context)
 {
     size_t length = 0u;
-    if (token == NULL || token_capacity < 2u ||
-        !rin_image_ppm_skip(data, size, pos)) return 0;
+    RinImageStatus status;
+    if (token == NULL || token_capacity < 2u || pos == NULL)
+        return RIN_IMAGE_INVALID_ARGUMENT;
+    status = rin_image_ppm_skip(data, size, pos, cancellation,
+                                cancellation_context);
+    if (status != RIN_IMAGE_OK) return status;
     while (*pos < size && !rin_image_ascii_space(data[*pos]) &&
            data[*pos] != '#') {
-        if (length + 1u >= token_capacity) return 0;
+        if (length + 1u >= token_capacity) return RIN_IMAGE_MALFORMED;
         token[length++] = (char)data[(*pos)++];
     }
-    if (length == 0u) return 0;
+    if (length == 0u) return RIN_IMAGE_MALFORMED;
     token[length] = '\0';
-    return 1;
+    return RIN_IMAGE_OK;
 }
 
 static int rin_image_ppm_number(const char* token, uint32_t* value)
@@ -125,24 +141,34 @@ static int rin_image_ppm_number(const char* token, uint32_t* value)
 
 static RinImageStatus rin_image_ppm_header(const uint8_t* data, size_t size,
                                            RinImageProbe* probe, int* ascii,
-                                           size_t* payload_offset)
+                                           size_t* payload_offset,
+                                           RinImageCancellationFunction cancellation,
+                                           void* cancellation_context)
 {
     char token[32];
     size_t pos = 0u;
     uint32_t width;
     uint32_t height;
     uint32_t maximum;
-    if (!rin_image_ppm_token(data, size, &pos, token, sizeof(token)))
-        return RIN_IMAGE_MALFORMED;
+    RinImageStatus status = rin_image_ppm_token(
+        data, size, &pos, token, sizeof(token), cancellation,
+        cancellation_context);
+    if (status != RIN_IMAGE_OK) return status;
     if (strcmp(token, "P6") == 0) *ascii = 0;
     else if (strcmp(token, "P3") == 0) *ascii = 1;
     else return RIN_IMAGE_UNSUPPORTED;
-    if (!rin_image_ppm_token(data, size, &pos, token, sizeof(token)) ||
-        !rin_image_ppm_number(token, &width) ||
-        !rin_image_ppm_token(data, size, &pos, token, sizeof(token)) ||
-        !rin_image_ppm_number(token, &height) ||
-        !rin_image_ppm_token(data, size, &pos, token, sizeof(token)) ||
-        !rin_image_ppm_number(token, &maximum) || width == 0u || height == 0u ||
+    status = rin_image_ppm_token(data, size, &pos, token, sizeof(token),
+                                 cancellation, cancellation_context);
+    if (status != RIN_IMAGE_OK) return status;
+    if (!rin_image_ppm_number(token, &width)) return RIN_IMAGE_UNSUPPORTED;
+    status = rin_image_ppm_token(data, size, &pos, token, sizeof(token),
+                                 cancellation, cancellation_context);
+    if (status != RIN_IMAGE_OK) return status;
+    if (!rin_image_ppm_number(token, &height)) return RIN_IMAGE_UNSUPPORTED;
+    status = rin_image_ppm_token(data, size, &pos, token, sizeof(token),
+                                 cancellation, cancellation_context);
+    if (status != RIN_IMAGE_OK) return status;
+    if (!rin_image_ppm_number(token, &maximum) || width == 0u || height == 0u ||
         maximum != 255u)
         return RIN_IMAGE_UNSUPPORTED;
     if (*ascii == 0) {
@@ -418,7 +444,8 @@ static RinImageStatus rin_image_probe_cancellable(
         int ascii = 0;
         size_t payload_offset = 0u;
         status = rin_image_ppm_header(data, source_bytes, probe, &ascii,
-                                      &payload_offset);
+                                      &payload_offset, cancellation,
+                                      cancellation_context);
         (void)ascii;
         (void)payload_offset;
     } else if (source_bytes >= 18u && data[0] == 0u && data[1] == 0u &&
@@ -544,9 +571,11 @@ static RinImageStatus rin_image_decode_ppm(const uint8_t* data, size_t size,
     RinImageProbe parsed_probe;
     uint64_t pixel_count = (uint64_t)probe->size.width *
                            (uint64_t)probe->size.height;
-    if (rin_image_ppm_header(data, size, &parsed_probe, &ascii,
-                             &payload_offset) != RIN_IMAGE_OK ||
-        pixel_count > SIZE_MAX / 3u)
+    RinImageStatus header_status = rin_image_ppm_header(
+        data, size, &parsed_probe, &ascii, &payload_offset, cancellation,
+        cancellation_context);
+    if (header_status != RIN_IMAGE_OK) return header_status;
+    if (pixel_count > SIZE_MAX / 3u)
         return RIN_IMAGE_MALFORMED;
     pos = payload_offset;
     if (!ascii) {
@@ -573,12 +602,23 @@ static RinImageStatus rin_image_decode_ppm(const uint8_t* data, size_t size,
             if (cancellation != NULL && (index & 4095u) == 0u &&
                 cancellation(cancellation_context))
                 return RIN_IMAGE_CANCELLED;
-            if (!rin_image_ppm_token(data, size, &pos, token, sizeof(token)) ||
-                !rin_image_ppm_number(token, &red) || red > 255u ||
-                !rin_image_ppm_token(data, size, &pos, token, sizeof(token)) ||
-                !rin_image_ppm_number(token, &green) || green > 255u ||
-                !rin_image_ppm_token(data, size, &pos, token, sizeof(token)) ||
-                !rin_image_ppm_number(token, &blue) || blue > 255u)
+            RinImageStatus token_status = rin_image_ppm_token(
+                data, size, &pos, token, sizeof(token), cancellation,
+                cancellation_context);
+            if (token_status != RIN_IMAGE_OK) return token_status;
+            if (!rin_image_ppm_number(token, &red) || red > 255u)
+                return RIN_IMAGE_MALFORMED;
+            token_status = rin_image_ppm_token(
+                data, size, &pos, token, sizeof(token), cancellation,
+                cancellation_context);
+            if (token_status != RIN_IMAGE_OK) return token_status;
+            if (!rin_image_ppm_number(token, &green) || green > 255u)
+                return RIN_IMAGE_MALFORMED;
+            token_status = rin_image_ppm_token(
+                data, size, &pos, token, sizeof(token), cancellation,
+                cancellation_context);
+            if (token_status != RIN_IMAGE_OK) return token_status;
+            if (!rin_image_ppm_number(token, &blue) || blue > 255u)
                 return RIN_IMAGE_MALFORMED;
             pixels[index] = UINT32_C(0xff000000) | (red << 16u) |
                             (green << 8u) | blue;

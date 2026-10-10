@@ -80,8 +80,10 @@ cancellation-aware entry point when the owner has a cancellation source.
 Failure clears the bounded output/scratch prefix; callers must not treat a
 failed buffer as a partial image. The common wrapper bounds allocation and
 output admission. Cancellable PNG/JPEG/GIF/WebP paths poll inside their
-parsing and decode loops. Cancellation is caller-driven and does not impose a
-universal CPU deadline or zero-allocation guarantee.
+parsing and decode loops. BMP/TGA/ICO/CUR poll while converting bounded rows,
+and PPM polls during header/comment scanning as well as raster conversion.
+Cancellation is caller-driven and does not impose a universal CPU deadline or
+zero-allocation guarantee.
 
 The parent repository's sanitizer CI builds a deterministic seed corpus for
 PNG, JPEG, GIF, WebP, BMP, ICO/CUR, TGA, and PPM and fuzzes the common probe and
