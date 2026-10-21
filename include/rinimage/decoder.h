@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #include "image.h"
-#include "../../../rinresource/include/rinresource/loader.h"
+#include <rinresource/loader.h>
 
 #ifdef __cplusplus
 extern "C" {
