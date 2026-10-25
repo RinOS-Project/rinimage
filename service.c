@@ -140,8 +140,9 @@ static RinImageStatus rin_image_service_copy_source(
     return rin_image_service_poll(poll, 1);
 }
 
-RinImageStatus rin_image_service_decode(
-    const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out)
+RinImageStatus rin_image_service_decode_with_probe(
+    const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out,
+    RinImageProbe* probe_out)
 {
     RinImageServicePollContext poll;
     RinImageProbe probe;
@@ -150,6 +151,7 @@ RinImageStatus rin_image_service_decode(
     uint64_t start_ticks;
     uint64_t pixel_bytes;
 
+    if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
     rin_image_service_clear_outputs(request, frame_out);
     if (request == NULL || frame_out == NULL || request->source == NULL ||
         request->source->read == NULL || request->source->authorize == NULL ||
@@ -217,5 +219,12 @@ RinImageStatus rin_image_service_decode(
         return status;
     }
     *frame_out = frame;
+    if (probe_out != NULL) *probe_out = probe;
     return RIN_IMAGE_OK;
+}
+
+RinImageStatus rin_image_service_decode(
+    const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out)
+{
+    return rin_image_service_decode_with_probe(request, frame_out, NULL);
 }

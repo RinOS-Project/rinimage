@@ -62,6 +62,13 @@ typedef struct RinImageServiceDecodeRequest {
 RinImageStatus rin_image_service_decode(
     const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out);
 
+/* Probe-bearing form for owners that publish decoded first-frame metadata.
+ * probe_out is zeroed on failure and receives the source's total frame count,
+ * kind, format, and canvas on success; pixel output remains first-frame-only. */
+RinImageStatus rin_image_service_decode_with_probe(
+    const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out,
+    RinImageProbe* probe_out);
+
 #ifdef __cplusplus
 }
 #endif
