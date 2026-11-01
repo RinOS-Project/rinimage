@@ -52,7 +52,9 @@ static RinImageStatus rin_image_png_reject_apng(
                  (uint32_t)data[offset + 3u];
         if ((uint64_t)length > (uint64_t)remaining - 12u)
             return RIN_IMAGE_MALFORMED;
-        if (memcmp(data + offset + 4u, "acTL", 4u) == 0)
+        if (memcmp(data + offset + 4u, "acTL", 4u) == 0 ||
+            memcmp(data + offset + 4u, "fcTL", 4u) == 0 ||
+            memcmp(data + offset + 4u, "fdAT", 4u) == 0)
             return RIN_IMAGE_UNSUPPORTED;
         if (memcmp(data + offset + 4u, "IEND", 4u) == 0)
             return length == 0u ? RIN_IMAGE_OK : RIN_IMAGE_MALFORMED;
