@@ -30,6 +30,37 @@ static int rin_image_png_signature(const uint8_t* data, size_t size)
            memcmp(data, signature, sizeof(signature)) == 0;
 }
 
+/* APNG control chunks are ancillary to a legacy PNG decoder, so a parser
+ * that ignores unknown chunks can otherwise publish only the default image
+ * while callers believe they opened a complete static image.  Until the
+ * animation API can carry APNG frame composition, reject the format at
+ * admission instead of silently discarding its animation. */
+static RinImageStatus rin_image_png_reject_apng(
+    const uint8_t* data, size_t source_bytes,
+    RinImageCancellationFunction cancellation, void* cancellation_context)
+{
+    size_t offset = 8u;
+    while (offset < source_bytes) {
+        uint32_t length;
+        size_t remaining = source_bytes - offset;
+        if (cancellation != NULL && cancellation(cancellation_context))
+            return RIN_IMAGE_CANCELLED;
+        if (remaining < 12u) return RIN_IMAGE_MALFORMED;
+        length = ((uint32_t)data[offset] << 24u) |
+                 ((uint32_t)data[offset + 1u] << 16u) |
+                 ((uint32_t)data[offset + 2u] << 8u) |
+                 (uint32_t)data[offset + 3u];
+        if ((uint64_t)length > (uint64_t)remaining - 12u)
+            return RIN_IMAGE_MALFORMED;
+        if (memcmp(data + offset + 4u, "acTL", 4u) == 0)
+            return RIN_IMAGE_UNSUPPORTED;
+        if (memcmp(data + offset + 4u, "IEND", 4u) == 0)
+            return length == 0u ? RIN_IMAGE_OK : RIN_IMAGE_MALFORMED;
+        offset += (size_t)length + 12u;
+    }
+    return RIN_IMAGE_MALFORMED;
+}
+
 RinImageStatus rin_image_probe_png_cancellable(
     const uint8_t* data, size_t source_bytes,
     const RinImageDecodeLimits* limits, RinImageProbe* probe_out,
@@ -48,6 +79,9 @@ RinImageStatus rin_image_probe_png_cancellable(
         return RIN_IMAGE_LIMIT;
     if (!rin_image_png_signature(data, source_bytes))
         return RIN_IMAGE_UNSUPPORTED;
+    status = rin_image_png_reject_apng(data, source_bytes, cancellation,
+                                       cancellation_context);
+    if (status != RIN_IMAGE_OK) return status;
 
     result = rpng_get_info_with_deadline(data, source_bytes, &width, &height,
                                          cancellation, cancellation_context);
