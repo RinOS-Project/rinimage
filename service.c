@@ -150,6 +150,7 @@ RinImageStatus rin_image_service_decode_with_probe(
     RinImageStatus status;
     uint64_t start_ticks;
     uint64_t pixel_bytes;
+    uint32_t duration_ms = 0u;
 
     if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
     rin_image_service_clear_outputs(request, frame_out);
@@ -158,6 +159,11 @@ RinImageStatus rin_image_service_decode_with_probe(
         request->source->capability == 0u ||
         request->source->generation == 0u || request->source->size == 0u ||
         request->capability == 0u || request->generation == 0u ||
+        (request->flags &
+         ~RIN_IMAGE_SERVICE_DECODE_FLAG_ENFORCE_AGGREGATE_OUTPUT) != 0u ||
+        ((request->flags &
+          RIN_IMAGE_SERVICE_DECODE_FLAG_ENFORCE_AGGREGATE_OUTPUT) == 0u &&
+         request->frame_index != 0u) ||
         request->source_buffer == NULL ||
         request->source_capacity < request->source->size ||
         request->timeout_ticks == 0u || request->clock == NULL)
@@ -184,11 +190,20 @@ RinImageStatus rin_image_service_decode_with_probe(
     }
 
     memset(&probe, 0, sizeof(probe));
-    status = rin_image_decode_cancellable(
-        request->source_buffer, request->source->size, &request->limits,
-        request->pixels, request->pixel_capacity, request->scratch,
-        request->scratch_capacity, rin_image_service_decoder_cancel, &poll,
-        &probe);
+    if ((request->flags &
+         RIN_IMAGE_SERVICE_DECODE_FLAG_ENFORCE_AGGREGATE_OUTPUT) != 0u) {
+        status = rin_image_decode_frame_cancellable(
+            request->source_buffer, request->source->size, &request->limits,
+            request->frame_index, request->pixels, request->pixel_capacity,
+            request->scratch, request->scratch_capacity,
+            rin_image_service_decoder_cancel, &poll, &probe, &duration_ms);
+    } else {
+        status = rin_image_decode_first_frame_cancellable(
+            request->source_buffer, request->source->size, &request->limits,
+            request->pixels, request->pixel_capacity, request->scratch,
+            request->scratch_capacity, rin_image_service_decoder_cancel,
+            &poll, &probe, &duration_ms);
+    }
     if (status != RIN_IMAGE_OK) {
         if (poll.status != RIN_IMAGE_OK) status = poll.status;
         rin_image_service_clear_buffer_outputs(request, frame_out);
@@ -206,6 +221,7 @@ RinImageStatus rin_image_service_decode_with_probe(
     frame.stride_bytes = probe.size.width * 4u;
     frame.pixel_format = RIN_IMAGE_PIXEL_ARGB8888;
     frame.kind = probe.kind;
+    frame.duration_ms = duration_ms;
     frame.pixels = request->pixels;
     frame.pixel_bytes = (size_t)pixel_bytes;
     status = rin_image_frame_validate(&request->limits, &frame);

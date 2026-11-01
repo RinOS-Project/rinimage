@@ -1,6 +1,6 @@
 # RinImage
 
-RinImage is the bounded, caller-buffer image probe and first-frame decode API
+RinImage is the bounded, caller-buffer image probe and selected-frame decode API
 used by RinOS userland. It converts accepted inputs into numeric
 `0xAARRGGBB` pixel words. The format enum describes format identifiers; it does
 not promise complete format compatibility.
@@ -10,9 +10,13 @@ not promise complete format compatibility.
 The public C API is in `include/rinimage/decoder.h` and `image.h`:
 
 - `rin_image_probe` validates a supported input and reports its dimensions,
-  format, frame count, and static/animated kind without allocating.
+  format, frame count, static/animated kind, and known loop count without
+  allocating. A known positive loop count includes the initial play; zero
+  means infinite.
 - `rin_image_decode` and `rin_image_decode_cancellable` decode the first
-  frame into caller-owned ARGB8888 storage. GIF and WebP require caller-owned
+  frame. `rin_image_decode_frame_cancellable` selects any GIF or WebP frame
+  and returns its delay and composited canvas in caller-owned ARGB8888 storage.
+  GIF and WebP require caller-owned
   scratch storage. The cancellable API passes its predicate through supported
   codec probes and decode loops, including WebP's RIFF, VP8, VP8L, and ALPH
   processing.
@@ -32,15 +36,15 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
 | --- | --- | --- |
 | PNG | Static PNG; color types 0, 2, 3, 4, and 6; legal 1/2/4/8/16-bit combinations; Adam7; palette and `tRNS`; chunk CRC validation. | APNG animation is not decoded. Ancillary metadata is not exposed as an image color-management or metadata API. |
 | JPEG | 8-bit baseline sequential DCT (SOF0), grayscale or three components, with 4:4:4, 4:2:2, or 4:2:0 sampling. Cancellation is polled during marker parsing, MCU rows, and output rows. | Progressive SOF2, other JPEG processes, precision, component counts, and sampling layouts are not supported. |
-| GIF | GIF87a/GIF89a structure and LZW; probe reports frame count; decode returns the first image descriptor only, including interlaced first frames. Cancellation is polled during block scanning, LZW, palette validation, and output rows. | This is not an animation player: later frames, timing, disposal compositing, and animation controls are not returned. Transparent first-frame pixels leave the logical-screen background in the opaque output. |
-| WebP | VP8 lossy and VP8L lossless payloads, VP8X container metadata needed by the decoder, supported `ALPH` modes, and first `ANMF` frame. Cancellation is polled during RIFF/frame chunk scans, compressed decode, alpha processing, and output conversion. | Only the first animation frame is decoded. The API does not expose a complete animation timeline or ICC/EXIF/XMP metadata contract. |
+| GIF | GIF87a/GIF89a structure and LZW; indexed frame decode composites frame rectangles with transparency and disposal methods 2/3, and reports frame delays and Netscape loop count. Cancellation is polled during block scanning, LZW, palette validation, canvas updates, and output rows. | Frame delays are returned as milliseconds. ICC/EXIF/XMP metadata is not exposed. |
+| WebP | VP8 lossy and VP8L lossless payloads, VP8X animation metadata, supported `ALPH` modes, and indexed `ANMF` frame decode with blend/disposal composition, frame delays, and loop count. Cancellation is polled during RIFF/frame chunk scans, compressed decode, alpha processing, compositing, and output conversion. | The API does not expose ICC/EXIF/XMP metadata. |
 | BMP | Windows DIB header size 40 bytes or greater, uncompressed `BI_RGB`, 24- or 32-bit pixels, top-down or bottom-up rows. | Palettes, bitfields, RLE, and other compression modes are unsupported. For 32-bit input the stored fourth byte is copied as alpha. |
 | ICO/CUR | First directory entry only; embedded PNG or uncompressed 24/32-bit DIB payload. | Other entries, compressed DIBs, and other embedded formats are unsupported. |
 | TGA | Unmapped, uncompressed true-color image type 2, 24 or 32 bits per pixel; both row origins are handled. | Color maps, RLE, grayscale, and other TGA image types are unsupported. |
 | PPM | P3 ASCII and P6 binary RGB with `maxval` exactly 255; P6 accepts a CRLF line terminator before the raster. | Other Netpbm variants, bit depths, and max values are unsupported. |
 
-`RinImageFormat` also has `UNKNOWN`; it is not decodable. Successful probe of
-an animated GIF or WebP does not mean that the decode API returns every frame.
+`RinImageFormat` also has `UNKNOWN`; it is not decodable. APNG remains
+unsupported and is rejected by the PNG decoder.
 
 ## Ownership and concurrency
 
@@ -51,20 +55,21 @@ uses a caller-provided read callback and caller-owned source storage. The
 common model keeps no image or filesystem handles after return.
 
 Independent calls may use independent buffers concurrently. Do not share a
-mutable output or scratch buffer between active calls. The WebP dependency
-also exposes process-global last-error diagnostics; callers that need reliable
-diagnostics must serialize WebP calls and read the diagnostic immediately
-after the failing call.
+mutable output or scratch buffer between active calls. RinWebP's legacy error
+accessors expose only the most recent call on the current thread; callers that
+need stable per-call diagnostics should use its caller-owned diagnostic API.
 
 ## Limits and errors
 
 The default common limits are 64 MiB encoded input, 4096 by 4096 dimensions,
-16,777,216 pixels, 1024 reported frames, and 64 MiB canonical output. A
-consumer may lower these values. Increasing them does not remove codec-local
+16,777,216 pixels, 1024 reported frames, and 64 MiB canonical output. Indexed
+animation decode applies that ceiling to all canvas frames; the original
+frame-zero API budgets its one output frame. A consumer may lower these
+values. Increasing them does not remove codec-local
 limits: JPEG and GIF each cap input at 64 MiB and decoded pixels at 16,777,216;
 PNG caps input at 64 MiB, either dimension at 4096, and inflated raw data at
-256 MiB. The first-frame contract still applies when a larger frame-count
-limit is supplied.
+256 MiB. The indexed animation API applies the aggregate frame budget when a
+larger frame-count limit is supplied.
 
 `RinImageStatus` distinguishes invalid arguments, unsupported profiles,
 resource limits, arithmetic overflow, malformed data, cancellation, timeout,

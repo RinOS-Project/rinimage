@@ -30,7 +30,14 @@ typedef struct RinImageProbe {
     RinImageSize size;
     uint32_t frame_count;
     RinImageFrameKind kind;
+    uint32_t loop_count;
+    uint32_t flags;
 } RinImageProbe;
+
+enum {
+    /* loop_count is the total number of plays; zero means infinite. */
+    RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN = 1u << 0
+};
 
 typedef int (*RinImageCancellationFunction)(void* context);
 
@@ -65,10 +72,11 @@ RinImageStatus rin_image_probe(const uint8_t* data, size_t source_bytes,
                                RinImageProbe* probe);
 
 /*
- * Decode the first frame into canonical 0xAARRGGBB words.  The output is
- * published only after a successful return.  GIF uses scratch as an index
- * buffer (one byte per canvas pixel); WebP uses it as a BGRA staging buffer
- * (four bytes per pixel).  Other formats do not require scratch.
+ * Decode frame zero into canonical 0xAARRGGBB words. The output is published
+ * only after a successful return. GIF uses scratch for LZW indices and, for
+ * later frames, an aligned canvas restore snapshot. WebP uses scratch as a
+ * BGRA staging buffer (four bytes per canvas pixel). Other formats do not
+ * require scratch.
  */
 RinImageStatus rin_image_decode(const uint8_t* data, size_t source_bytes,
                                 const RinImageDecodeLimits* limits,
@@ -95,6 +103,28 @@ RinImageStatus rin_image_decode_cancellable(
     size_t pixel_capacity, uint8_t* scratch, size_t scratch_capacity,
     RinImageCancellationFunction cancellation, void* cancellation_context,
     RinImageProbe* probe_out);
+
+/* Compatibility service entry for the original first-frame contract. It
+ * keeps the single-frame output budget while also returning frame timing. */
+RinImageStatus rin_image_decode_first_frame_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, uint32_t* pixels,
+    size_t pixel_capacity, uint8_t* scratch, size_t scratch_capacity,
+    RinImageCancellationFunction cancellation, void* cancellation_context,
+    RinImageProbe* probe_out, uint32_t* duration_ms_out);
+
+/* Decode one composited canvas frame by its zero-based source index. Static
+ * formats accept only index zero. Frame pixels are published only after the
+ * complete frame succeeds; probe_out reports source sequence and loop data.
+ * A known loop_count is total plays (zero means infinite), and duration_ms_out
+ * receives the selected frame delay (zero for stills). */
+RinImageStatus rin_image_decode_frame_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, uint32_t frame_index,
+    uint32_t* pixels, size_t pixel_capacity, uint8_t* scratch,
+    size_t scratch_capacity, RinImageCancellationFunction cancellation,
+    void* cancellation_context, RinImageProbe* probe_out,
+    uint32_t* duration_ms_out);
 
 #ifdef __cplusplus
 }

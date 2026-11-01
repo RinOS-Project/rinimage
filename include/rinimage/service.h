@@ -29,6 +29,12 @@ typedef int (*RinImageServiceSourceAuthorizeFunction)(
 
 typedef uint64_t (*RinImageServiceClockFunction)(void* context);
 
+enum {
+    /* Apply the aggregate canvas-sequence output budget. Without this flag,
+     * service requests retain the original frame-zero-only behavior. */
+    RIN_IMAGE_SERVICE_DECODE_FLAG_ENFORCE_AGGREGATE_OUTPUT = 1u << 0
+};
+
 typedef struct RinImageServiceSource {
     uint64_t capability;
     uint64_t generation;
@@ -42,6 +48,8 @@ typedef struct RinImageServiceDecodeRequest {
     const RinImageServiceSource* source;
     uint64_t capability;
     uint64_t generation;
+    uint32_t frame_index; /* zero-based selected source frame */
+    uint32_t flags;
     uint8_t* source_buffer;
     size_t source_capacity;
     RinImageDecodeLimits limits;
@@ -56,15 +64,15 @@ typedef struct RinImageServiceDecodeRequest {
     uint64_t timeout_ticks;
 } RinImageServiceDecodeRequest;
 
-/* Decode one bounded first frame through the service boundary.  frame_out is
+/* Decode one bounded selected frame through the service boundary. frame_out is
  * a non-owning descriptor into pixels and is cleared on every failure.  A
  * successful call leaves source_buffer and pixels owned by the caller. */
 RinImageStatus rin_image_service_decode(
     const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out);
 
-/* Probe-bearing form for owners that publish decoded first-frame metadata.
+/* Probe-bearing form for owners that publish decoded frame metadata.
  * probe_out is zeroed on failure and receives the source's total frame count,
- * kind, format, and canvas on success; pixel output remains first-frame-only. */
+ * loop policy, kind, format, and canvas on success. */
 RinImageStatus rin_image_service_decode_with_probe(
     const RinImageServiceDecodeRequest* request, RinImageFrame* frame_out,
     RinImageProbe* probe_out);

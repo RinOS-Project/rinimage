@@ -95,6 +95,8 @@ RinImageStatus rin_image_probe_png_cancellable(
     probe_out->size.height = (uint32_t)height;
     probe_out->frame_count = 1u;
     probe_out->kind = RIN_IMAGE_FRAME_STATIC;
+    probe_out->loop_count = 1u;
+    probe_out->flags = RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
     status = rin_image_validate_decode(
         limits, source_bytes, probe_out->size, probe_out->frame_count,
         RIN_IMAGE_PIXEL_ARGB8888);

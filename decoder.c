@@ -356,8 +356,8 @@ static RinImageStatus rin_image_admit(const RinImageDecodeLimits* limits,
     status = rin_image_metadata_validate(limits, &metadata);
     if (status != RIN_IMAGE_OK) return status;
 
-    /* This API publishes one frame.  Metadata still admits the complete
-     * animation count, while output budgeting covers only the frame emitted. */
+    /* Probe and legacy frame-zero decode retain their single-frame budget.
+     * The indexed animation API applies the aggregate sequence ceiling. */
     return rin_image_validate_decode(
         limits, source_bytes, probe->size, 1u,
         RIN_IMAGE_PIXEL_ARGB8888);
@@ -467,17 +467,30 @@ static RinImageStatus rin_image_probe_cancellable(
         status = RIN_IMAGE_OK;
     } else if (source_bytes >= 3u && data[0] == 'G' && data[1] == 'I' &&
                data[2] == 'F') {
+        uint32_t loop_count = 0u;
+        int loop_count_known = 0;
         const int result = rgif_get_info_cancellable(
             data, source_bytes, &width, &height, &frames, cancellation,
             cancellation_context);
         if (result != RGIF_OK)
             return rin_image_codec_status(result, RGIF_UNSUPPORTED);
+        {
+            const int animation_result = rgif_get_animation_info_cancellable(
+                data, source_bytes, &loop_count, &loop_count_known,
+                cancellation, cancellation_context);
+            if (animation_result != RGIF_OK)
+                return rin_image_codec_status(animation_result,
+                                              RGIF_UNSUPPORTED);
+        }
         probe->format = RIN_IMAGE_FORMAT_GIF;
         probe->size.width = (uint32_t)width;
         probe->size.height = (uint32_t)height;
         probe->frame_count = (uint32_t)frames;
         probe->kind = frames > 1 ? RIN_IMAGE_FRAME_ANIMATED
                                  : RIN_IMAGE_FRAME_STATIC;
+        probe->loop_count = loop_count;
+        if (loop_count_known)
+            probe->flags |= RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
         status = RIN_IMAGE_OK;
     } else if (source_bytes >= 4u && data[0] == 0x89u && data[1] == 'P' &&
                data[2] == 'N' && data[3] == 'G') {
@@ -490,6 +503,9 @@ static RinImageStatus rin_image_probe_cancellable(
         RinImageWebPCancellation webp_cancellation = {
             cancellation, cancellation_context, 0
         };
+        uint32_t frame_count = 0u;
+        uint32_t loop_count = 0u;
+        int loop_count_known = 0;
         if (!WebPGetInfoWithCancellation(data, source_bytes, &width, &height,
                                          cancellation != NULL
                                              ? rin_image_webp_cancelled : NULL,
@@ -499,16 +515,35 @@ static RinImageStatus rin_image_probe_cancellable(
                 return RIN_IMAGE_CANCELLED;
             return RIN_IMAGE_MALFORMED;
         }
+        if (!WebPGetAnimationInfoWithCancellation(
+                data, source_bytes, &frame_count, &loop_count,
+                &loop_count_known,
+                cancellation != NULL ? rin_image_webp_cancelled : NULL,
+                cancellation != NULL ? &webp_cancellation : NULL)) {
+            if (webp_cancellation.cancelled)
+                return RIN_IMAGE_CANCELLED;
+            return RIN_IMAGE_MALFORMED;
+        }
         probe->format = RIN_IMAGE_FORMAT_WEBP;
         probe->size.width = (uint32_t)width;
         probe->size.height = (uint32_t)height;
-        probe->frame_count = 1u;
-        probe->kind = RIN_IMAGE_FRAME_STATIC;
+        probe->frame_count = frame_count;
+        probe->kind = frame_count > 1u ? RIN_IMAGE_FRAME_ANIMATED
+                                       : RIN_IMAGE_FRAME_STATIC;
+        probe->loop_count = loop_count;
+        if (loop_count_known)
+            probe->flags |= RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
         status = RIN_IMAGE_OK;
     } else {
         return RIN_IMAGE_UNSUPPORTED;
     }
     if (status != RIN_IMAGE_OK) return status;
+    if (probe->frame_count == 1u &&
+        probe->format != RIN_IMAGE_FORMAT_GIF &&
+        probe->format != RIN_IMAGE_FORMAT_WEBP) {
+        probe->loop_count = 1u;
+        probe->flags |= RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
+    }
     if (cancellation != NULL && cancellation(cancellation_context))
         return RIN_IMAGE_CANCELLED;
     return rin_image_admit(limits, source_bytes, probe);
@@ -697,18 +732,22 @@ static RinImageStatus rin_image_decode_icon(
     return RIN_IMAGE_OK;
 }
 
-RinImageStatus rin_image_decode_cancellable(
+static RinImageStatus rin_image_decode_frame_cancellable_impl(
     const uint8_t* data, size_t source_bytes,
-    const RinImageDecodeLimits* limits, uint32_t* pixels,
+    const RinImageDecodeLimits* limits, uint32_t frame_index,
+    uint32_t* pixels,
     size_t pixel_capacity, uint8_t* scratch, size_t scratch_capacity,
     RinImageCancellationFunction cancellation, void* cancellation_context,
-    RinImageProbe* probe_out)
+    RinImageProbe* probe_out, uint32_t* duration_ms_out,
+    int enforce_aggregate_output)
 {
     RinImageProbe probe;
     RinImageStatus status;
     size_t pixel_count;
     size_t output_bytes;
+    uint32_t frame_duration_ms = 0u;
     if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
+    if (duration_ms_out != NULL) *duration_ms_out = 0u;
     rin_image_clear_decode_output(pixels, pixel_capacity);
     rin_image_clear_decode_scratch(scratch, scratch_capacity);
     if (pixels == NULL) return RIN_IMAGE_INVALID_ARGUMENT;
@@ -716,6 +755,20 @@ RinImageStatus rin_image_decode_cancellable(
         data, source_bytes, limits, &probe, cancellation,
         cancellation_context);
     if (status != RIN_IMAGE_OK) return status;
+    if (enforce_aggregate_output) {
+        status = rin_image_validate_decode(
+            limits, source_bytes, probe.size, probe.frame_count,
+            RIN_IMAGE_PIXEL_ARGB8888);
+        if (status != RIN_IMAGE_OK) return status;
+    }
+    if (frame_index >= probe.frame_count) return RIN_IMAGE_INVALID_ARGUMENT;
+    if (frame_index != 0u && probe.format != RIN_IMAGE_FORMAT_GIF &&
+        probe.format != RIN_IMAGE_FORMAT_WEBP)
+        return RIN_IMAGE_INVALID_ARGUMENT;
+    if (probe.frame_count == 1u) {
+        probe.loop_count = 1u;
+        probe.flags |= RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
+    }
     pixel_count = (size_t)probe.size.width * (size_t)probe.size.height;
     output_bytes = pixel_count * sizeof(uint32_t);
     if (pixel_count == 0u || pixel_count > pixel_capacity ||
@@ -738,15 +791,24 @@ RinImageStatus rin_image_decode_cancellable(
         }
         break;
     case RIN_IMAGE_FORMAT_GIF:
-        if (scratch == NULL || scratch_capacity < pixel_count)
-            return RIN_IMAGE_LIMIT;
         {
-            const int result = rgif_decode_cancellable(
-                data, source_bytes, pixels, (int)probe.size.width,
-                (int)probe.size.height, scratch, scratch_capacity,
-                cancellation, cancellation_context);
+            uint32_t loop_count = 0u;
+            int loop_count_known = 0;
+            const int result = rgif_decode_frame_cancellable(
+                data, source_bytes, frame_index, pixels,
+                (int)probe.size.width, (int)probe.size.height, scratch,
+                scratch_capacity, &frame_duration_ms, &loop_count,
+                &loop_count_known, cancellation, cancellation_context);
+            if (result == RGIF_OK) {
+                probe.loop_count = loop_count;
+                if (loop_count_known)
+                    probe.flags |= RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
+                else
+                    probe.flags &= ~RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
+            }
             status = result == RGIF_OK ? RIN_IMAGE_OK
                 : result == RGIF_CANCELLED ? RIN_IMAGE_CANCELLED
+                : result == RGIF_ERROR ? RIN_IMAGE_LIMIT
                 : rin_image_codec_status(result, RGIF_UNSUPPORTED);
         }
         break;
@@ -757,18 +819,30 @@ RinImageStatus rin_image_decode_cancellable(
         break;
     case RIN_IMAGE_FORMAT_WEBP: {
         size_t index;
+        uint32_t frame_count = 0u;
+        uint32_t loop_count = 0u;
+        int loop_count_known = 0;
         RinImageWebPCancellation webp_cancellation = {
             cancellation, cancellation_context, 0
         };
         if (scratch == NULL || scratch_capacity < output_bytes)
             return RIN_IMAGE_LIMIT;
-        if (WebPDecodeBGRAIntoWithCancellation(
-                data, source_bytes, scratch, output_bytes,
+        if (WebPDecodeAnimationFrameBGRAIntoWithCancellation(
+                data, source_bytes, frame_index, scratch, output_bytes,
                 (int)probe.size.width * 4,
+                &frame_duration_ms, &frame_count, &loop_count,
+                &loop_count_known,
                 cancellation != NULL ? rin_image_webp_cancelled : NULL,
                 cancellation != NULL ? &webp_cancellation : NULL) == NULL) {
             status = webp_cancellation.cancelled
                 ? RIN_IMAGE_CANCELLED : RIN_IMAGE_MALFORMED;
+            break;
+        }
+        if (frame_count != probe.frame_count ||
+            loop_count != probe.loop_count ||
+            loop_count_known !=
+                ((probe.flags & RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN) != 0u)) {
+            status = RIN_IMAGE_MALFORMED;
             break;
         }
         if (cancellation != NULL && cancellation(cancellation_context)) {
@@ -825,6 +899,7 @@ RinImageStatus rin_image_decode_cancellable(
         }
         return status;
     }
+    if (duration_ms_out != NULL) *duration_ms_out = frame_duration_ms;
 
     {
         RinImageFrame frame = {};
@@ -842,6 +917,45 @@ RinImageStatus rin_image_decode_cancellable(
     }
     if (probe_out != NULL) *probe_out = probe;
     return RIN_IMAGE_OK;
+}
+
+RinImageStatus rin_image_decode_frame_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, uint32_t frame_index,
+    uint32_t* pixels, size_t pixel_capacity, uint8_t* scratch,
+    size_t scratch_capacity, RinImageCancellationFunction cancellation,
+    void* cancellation_context, RinImageProbe* probe_out,
+    uint32_t* duration_ms_out)
+{
+    return rin_image_decode_frame_cancellable_impl(
+        data, source_bytes, limits, frame_index, pixels, pixel_capacity,
+        scratch, scratch_capacity, cancellation, cancellation_context,
+        probe_out, duration_ms_out, 1);
+}
+
+RinImageStatus rin_image_decode_first_frame_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, uint32_t* pixels,
+    size_t pixel_capacity, uint8_t* scratch, size_t scratch_capacity,
+    RinImageCancellationFunction cancellation, void* cancellation_context,
+    RinImageProbe* probe_out, uint32_t* duration_ms_out)
+{
+    return rin_image_decode_frame_cancellable_impl(
+        data, source_bytes, limits, 0u, pixels, pixel_capacity, scratch,
+        scratch_capacity, cancellation, cancellation_context, probe_out,
+        duration_ms_out, 0);
+}
+
+RinImageStatus rin_image_decode_cancellable(
+    const uint8_t* data, size_t source_bytes,
+    const RinImageDecodeLimits* limits, uint32_t* pixels,
+    size_t pixel_capacity, uint8_t* scratch, size_t scratch_capacity,
+    RinImageCancellationFunction cancellation, void* cancellation_context,
+    RinImageProbe* probe_out)
+{
+    return rin_image_decode_first_frame_cancellable(
+        data, source_bytes, limits, pixels, pixel_capacity, scratch,
+        scratch_capacity, cancellation, cancellation_context, probe_out, NULL);
 }
 
 RinImageStatus rin_image_decode(const uint8_t* data, size_t source_bytes,
