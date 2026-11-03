@@ -762,10 +762,10 @@ static RinImageStatus rin_image_decode_frame_cancellable_impl(
         if (status != RIN_IMAGE_OK) return status;
     }
     if (frame_index >= probe.frame_count) return RIN_IMAGE_INVALID_ARGUMENT;
-    if (frame_index != 0u && probe.format != RIN_IMAGE_FORMAT_GIF &&
-        probe.format != RIN_IMAGE_FORMAT_WEBP)
+    if (frame_index != 0u && probe.kind != RIN_IMAGE_FRAME_ANIMATED)
         return RIN_IMAGE_INVALID_ARGUMENT;
-    if (probe.frame_count == 1u) {
+    if (probe.frame_count == 1u &&
+        probe.kind != RIN_IMAGE_FRAME_ANIMATED) {
         probe.loop_count = 1u;
         probe.flags |= RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
     }
@@ -813,9 +813,32 @@ static RinImageStatus rin_image_decode_frame_cancellable_impl(
         }
         break;
     case RIN_IMAGE_FORMAT_PNG:
-        status = rin_image_decode_png_cancellable(
-            data, source_bytes, limits, pixels, pixel_capacity, cancellation,
-            cancellation_context, NULL);
+        if (probe.kind == RIN_IMAGE_FRAME_ANIMATED) {
+            RPNGAnimationInfo animation;
+            const int result = rpng_decode_animation_frame_with_deadline(
+                data, source_bytes, frame_index, pixels,
+                (int)probe.size.width, (int)probe.size.height,
+                &frame_duration_ms, &animation, cancellation,
+                cancellation_context);
+            if (result == RPNG_OK &&
+                (animation.frame_count != probe.frame_count ||
+                 animation.width != probe.size.width ||
+                 animation.height != probe.size.height ||
+                 animation.loop_count != probe.loop_count)) {
+                status = RIN_IMAGE_MALFORMED;
+            } else {
+                status = result == RPNG_OK ? RIN_IMAGE_OK
+                    : result == RPNG_ERR_DEADLINE ? RIN_IMAGE_CANCELLED
+                    : result == RPNG_ERR_LIMIT || result == RPNG_ERR_NOMEM
+                        ? RIN_IMAGE_LIMIT
+                    : result == RPNG_ERR_UNSUPPORTED ? RIN_IMAGE_UNSUPPORTED
+                    : RIN_IMAGE_MALFORMED;
+            }
+        } else {
+            status = rin_image_decode_png_cancellable(
+                data, source_bytes, limits, pixels, pixel_capacity,
+                cancellation, cancellation_context, NULL);
+        }
         break;
     case RIN_IMAGE_FORMAT_WEBP: {
         size_t index;

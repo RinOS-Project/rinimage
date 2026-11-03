@@ -15,7 +15,8 @@ static int rin_image_png_limits_valid(const RinImageDecodeLimits* limits)
 
 static RinImageStatus rin_image_png_codec_status(int result)
 {
-    if (result == RPNG_ERR_LIMIT) return RIN_IMAGE_LIMIT;
+    if (result == RPNG_ERR_LIMIT || result == RPNG_ERR_NOMEM)
+        return RIN_IMAGE_LIMIT;
     if (result == RPNG_ERR_DEADLINE) return RIN_IMAGE_CANCELLED;
     return result == RPNG_ERR_UNSUPPORTED ? RIN_IMAGE_UNSUPPORTED
                                           : RIN_IMAGE_MALFORMED;
@@ -30,39 +31,6 @@ static int rin_image_png_signature(const uint8_t* data, size_t size)
            memcmp(data, signature, sizeof(signature)) == 0;
 }
 
-/* APNG control chunks are ancillary to a legacy PNG decoder, so a parser
- * that ignores unknown chunks can otherwise publish only the default image
- * while callers believe they opened a complete static image.  Until the
- * animation API can carry APNG frame composition, reject the format at
- * admission instead of silently discarding its animation. */
-static RinImageStatus rin_image_png_reject_apng(
-    const uint8_t* data, size_t source_bytes,
-    RinImageCancellationFunction cancellation, void* cancellation_context)
-{
-    size_t offset = 8u;
-    while (offset < source_bytes) {
-        uint32_t length;
-        size_t remaining = source_bytes - offset;
-        if (cancellation != NULL && cancellation(cancellation_context))
-            return RIN_IMAGE_CANCELLED;
-        if (remaining < 12u) return RIN_IMAGE_MALFORMED;
-        length = ((uint32_t)data[offset] << 24u) |
-                 ((uint32_t)data[offset + 1u] << 16u) |
-                 ((uint32_t)data[offset + 2u] << 8u) |
-                 (uint32_t)data[offset + 3u];
-        if ((uint64_t)length > (uint64_t)remaining - 12u)
-            return RIN_IMAGE_MALFORMED;
-        if (memcmp(data + offset + 4u, "acTL", 4u) == 0 ||
-            memcmp(data + offset + 4u, "fcTL", 4u) == 0 ||
-            memcmp(data + offset + 4u, "fdAT", 4u) == 0)
-            return RIN_IMAGE_UNSUPPORTED;
-        if (memcmp(data + offset + 4u, "IEND", 4u) == 0)
-            return length == 0u ? RIN_IMAGE_OK : RIN_IMAGE_MALFORMED;
-        offset += (size_t)length + 12u;
-    }
-    return RIN_IMAGE_MALFORMED;
-}
-
 RinImageStatus rin_image_probe_png_cancellable(
     const uint8_t* data, size_t source_bytes,
     const RinImageDecodeLimits* limits, RinImageProbe* probe_out,
@@ -71,6 +39,8 @@ RinImageStatus rin_image_probe_png_cancellable(
     int width = 0;
     int height = 0;
     int result;
+    RPNGAnimationInfo animation;
+    RinImageMetadata metadata;
     RinImageStatus status;
 
     if (probe_out != NULL) memset(probe_out, 0, sizeof(*probe_out));
@@ -81,25 +51,42 @@ RinImageStatus rin_image_probe_png_cancellable(
         return RIN_IMAGE_LIMIT;
     if (!rin_image_png_signature(data, source_bytes))
         return RIN_IMAGE_UNSUPPORTED;
-    status = rin_image_png_reject_apng(data, source_bytes, cancellation,
-                                       cancellation_context);
-    if (status != RIN_IMAGE_OK) return status;
-
-    result = rpng_get_info_with_deadline(data, source_bytes, &width, &height,
-                                         cancellation, cancellation_context);
-    if (result != RPNG_OK) return rin_image_png_codec_status(result);
-    if (width <= 0 || height <= 0) return RIN_IMAGE_MALFORMED;
-
-    probe_out->format = RIN_IMAGE_FORMAT_PNG;
-    probe_out->size.width = (uint32_t)width;
-    probe_out->size.height = (uint32_t)height;
-    probe_out->frame_count = 1u;
-    probe_out->kind = RIN_IMAGE_FRAME_STATIC;
-    probe_out->loop_count = 1u;
-    probe_out->flags = RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
-    status = rin_image_validate_decode(
-        limits, source_bytes, probe_out->size, probe_out->frame_count,
-        RIN_IMAGE_PIXEL_ARGB8888);
+    result = rpng_get_animation_info_with_deadline(
+        data, source_bytes, &animation, cancellation, cancellation_context);
+    if (result == RPNG_OK) {
+        probe_out->format = RIN_IMAGE_FORMAT_PNG;
+        probe_out->size.width = animation.width;
+        probe_out->size.height = animation.height;
+        probe_out->frame_count = animation.frame_count;
+        probe_out->kind = RIN_IMAGE_FRAME_ANIMATED;
+        probe_out->loop_count = animation.loop_count;
+        probe_out->flags = RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
+    } else if (result == RPNG_ERR_UNSUPPORTED) {
+        result = rpng_get_info_with_deadline(
+            data, source_bytes, &width, &height, cancellation,
+            cancellation_context);
+        if (result != RPNG_OK) return rin_image_png_codec_status(result);
+        if (width <= 0 || height <= 0) return RIN_IMAGE_MALFORMED;
+        probe_out->format = RIN_IMAGE_FORMAT_PNG;
+        probe_out->size.width = (uint32_t)width;
+        probe_out->size.height = (uint32_t)height;
+        probe_out->frame_count = 1u;
+        probe_out->kind = RIN_IMAGE_FRAME_STATIC;
+        probe_out->loop_count = 1u;
+        probe_out->flags = RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
+    } else {
+        return rin_image_png_codec_status(result);
+    }
+    metadata.canvas = probe_out->size;
+    metadata.frame_count = probe_out->frame_count;
+    metadata.kind = probe_out->kind;
+    metadata.has_alpha = 0u;
+    metadata.reserved[0] = metadata.reserved[1] = metadata.reserved[2] = 0u;
+    status = rin_image_metadata_validate(limits, &metadata);
+    if (status == RIN_IMAGE_OK)
+        status = rin_image_validate_decode(
+            limits, source_bytes, probe_out->size, 1u,
+            RIN_IMAGE_PIXEL_ARGB8888);
     if (status != RIN_IMAGE_OK) memset(probe_out, 0, sizeof(*probe_out));
     return status;
 }
@@ -140,9 +127,22 @@ RinImageStatus rin_image_decode_png_cancellable(
         pixel_count > (uint64_t)pixel_capacity)
         return RIN_IMAGE_LIMIT;
     pixel_bytes = (size_t)pixel_count * sizeof(uint32_t);
-    decode_result = rpng_decode_rgba_with_deadline(
-        data, source_bytes, pixels, (int)probe.size.width,
-        (int)probe.size.height, cancellation, cancellation_context);
+    if (probe.kind == RIN_IMAGE_FRAME_ANIMATED) {
+        RPNGAnimationInfo animation;
+        uint32_t duration_ms = 0u;
+        decode_result = rpng_decode_animation_frame_with_deadline(
+            data, source_bytes, 0u, pixels, (int)probe.size.width,
+            (int)probe.size.height, &duration_ms, &animation,
+            cancellation, cancellation_context);
+        if (decode_result == RPNG_OK) {
+            probe.loop_count = animation.loop_count;
+            probe.flags |= RIN_IMAGE_PROBE_LOOP_COUNT_KNOWN;
+        }
+    } else {
+        decode_result = rpng_decode_rgba_with_deadline(
+            data, source_bytes, pixels, (int)probe.size.width,
+            (int)probe.size.height, cancellation, cancellation_context);
+    }
     if (decode_result != RPNG_OK) {
         memset(pixels, 0, pixel_bytes);
         return rin_image_png_codec_status(decode_result);

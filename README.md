@@ -15,8 +15,10 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
   means infinite.
 - `rin_image_decode` and `rin_image_decode_cancellable` decode the first
   frame. `rin_image_decode_frame_cancellable` selects any GIF or WebP frame
-  and returns its delay and composited canvas in caller-owned ARGB8888 storage.
-  GIF and WebP require caller-owned
+  or APNG frame and returns its delay and composited canvas in caller-owned
+  ARGB8888 storage. APNG loop count follows the same contract as GIF/WebP:
+  zero means infinite; a positive value includes the initial play. GIF and
+  WebP require caller-owned
   scratch storage. The cancellable API passes its predicate through supported
   codec probes and decode loops, including WebP's RIFF, VP8, VP8L, and ALPH
   processing.
@@ -34,7 +36,7 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
 
 | Format | Implemented profile | Deliberate boundary |
 | --- | --- | --- |
-| PNG | Static PNG; color types 0, 2, 3, 4, and 6; legal 1/2/4/8/16-bit combinations; Adam7; palette and `tRNS`; chunk CRC validation. | APNG animation is not decoded. Ancillary metadata is not exposed as an image color-management or metadata API. |
+| PNG | Static PNG and APNG; color types 0, 2, 3, 4, and 6; legal 1/2/4/8/16-bit combinations; Adam7; palette and `tRNS`; chunk CRC validation. APNG frame rectangles are decoded and composited using source/over blend and none/background/previous disposal, with per-frame delay and total play count. | Static `rpng_*` calls reject APNG; select frames through RinImage's indexed API. Ancillary metadata is not exposed as an image color-management or metadata API. |
 | JPEG | 8-bit baseline sequential DCT (SOF0), grayscale or three components, with 4:4:4, 4:2:2, or 4:2:0 sampling. Cancellation is polled during marker parsing, MCU rows, and output rows. | Progressive SOF2, other JPEG processes, precision, component counts, and sampling layouts are not supported. |
 | GIF | GIF87a/GIF89a structure and LZW; indexed frame decode composites frame rectangles with transparency and disposal methods 2/3, and reports frame delays and Netscape loop count. Cancellation is polled during block scanning, LZW, palette validation, canvas updates, and output rows. | Frame delays are returned as milliseconds. ICC/EXIF/XMP metadata is not exposed. |
 | WebP | VP8 lossy and VP8L lossless payloads, VP8X animation metadata, supported `ALPH` modes, and indexed `ANMF` frame decode with blend/disposal composition, frame delays, and loop count. Cancellation is polled during RIFF/frame chunk scans, compressed decode, alpha processing, compositing, and output conversion. | The API does not expose ICC/EXIF/XMP metadata. |
@@ -43,8 +45,9 @@ The public C API is in `include/rinimage/decoder.h` and `image.h`:
 | TGA | Unmapped, uncompressed true-color image type 2, 24 or 32 bits per pixel; both row origins are handled. | Color maps, RLE, grayscale, and other TGA image types are unsupported. |
 | PPM | P3 ASCII and P6 binary RGB with `maxval` exactly 255; P6 accepts a CRLF line terminator before the raster. | Other Netpbm variants, bit depths, and max values are unsupported. |
 
-`RinImageFormat` also has `UNKNOWN`; it is not decodable. APNG remains
-unsupported and is rejected by the PNG decoder.
+`RinImageFormat` also has `UNKNOWN`; it is not decodable. The indexed PNG
+animation path validates APNG sequence numbers, frame bounds, CRCs, frame
+count, and aggregate output/work limits before publishing a composited frame.
 
 ## Ownership and concurrency
 
@@ -67,9 +70,10 @@ animation decode applies that ceiling to all canvas frames; the original
 frame-zero API budgets its one output frame. A consumer may lower these
 values. Increasing them does not remove codec-local
 limits: JPEG and GIF each cap input at 64 MiB and decoded pixels at 16,777,216;
-PNG caps input at 64 MiB, either dimension at 4096, and inflated raw data at
-256 MiB. The indexed animation API applies the aggregate frame budget when a
-larger frame-count limit is supplied.
+PNG caps input at 64 MiB, either dimension at 4096, inflated raw data at 256
+MiB, APNG frame count at 4096, and cumulative canvas/frame processing at 64
+million pixels. The indexed animation API applies the aggregate frame budget
+when a larger frame-count limit is supplied.
 
 `RinImageStatus` distinguishes invalid arguments, unsupported profiles,
 resource limits, arithmetic overflow, malformed data, cancellation, timeout,
